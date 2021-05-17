@@ -296,8 +296,6 @@ final class ApproovHurlStack extends HurlStack {
             String headerValue = request.getHeaders().get(bindingHeader);
             if (headerValue != null)
                 Approov.setDataHashInToken(headerValue);
-            else
-                Approov.setDataHashInToken("NONE");
         }
 
         // request an Approov token for the domain
