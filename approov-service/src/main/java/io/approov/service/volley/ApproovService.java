@@ -1,4 +1,3 @@
-// ApproovService for integrating Approov into apps using Volley.
 //
 // MIT License
 // 
@@ -18,7 +17,6 @@
 
 package io.approov.service.volley;
 
-import android.content.SharedPreferences;
 import android.util.Log;
 import android.content.Context;
 
@@ -52,18 +50,11 @@ public class ApproovService {
     // logging tag
     private static final String TAG = "ApproovService";
 
-    // keys for the Approov shared preferences
-    private static final String APPROOV_CONFIG = "approov-config";
-    private static final String APPROOV_PREFS = "approov-prefs";
-
     // default header that will be added to Approov enabled requests
     private static final String APPROOV_TOKEN_HEADER = "Approov-Token";
 
     // default  prefix to be added before the Approov token by default
     private static final String APPROOV_TOKEN_PREFIX = "";
-
-    // context for handling preferences
-    private Context appContext;
 
     // alternative http stack to be used that adds token and pinning, or null if could not be initialized
     private ApproovHurlStack hurlStack;
@@ -88,10 +79,9 @@ public class ApproovService {
         approovTokenHeader = APPROOV_TOKEN_HEADER;
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         bindingHeader = null;
-        appContext = context;
-        String dynamicConfig = getApproovDynamicConfig();
         try {
-            Approov.initialize(context, config, dynamicConfig, null);
+            Approov.initialize(context, config, "auto", null);
+            Approov.setUserProperty("QuickstartVolley");
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Approov initialization failed: " + e.getMessage());
             return;
@@ -99,57 +89,17 @@ public class ApproovService {
 
         // create an alternative hurlstack to use
         hurlStack = new ApproovHurlStack(this);
-
-        // if we didn't have a dynamic configuration (after the first launch on the app) then
-        // we fetch the latest and write it to local storage now
-        if (dynamicConfig == null)
-            updateDynamicConfig();
     }
 
     /**
-     * Prefetches an Approov token in the background. The placeholder domain "www.approov.io" is
-     * simply used to initiate the fetch and does not need to be a valid API for the account. This
-     * method can be used to lower the effective latency of a subsequent token fetch by starting
-     * the operation earlier so the subsequent fetch may be able to use a cached token.
+     * Prefetches in the background to lower the effective latency of a subsequent token fetch or
+     * secure string fetch by starting the operation earlier so the subsequent fetch may be able to
+     * use cached data.
      */
-    public synchronized void prefetchApproovToken() {
+    public synchronized void prefetch() {
         if (hurlStack != null)
+            // fetch an Approov token using a placeholder domain
             Approov.fetchApproovToken(new PrefetchCallbackHandler(), "www.approov.io");
-    }
-
-    /**
-     * Writes the latest dynamic configuration that the Approov SDK has.
-     */
-    public synchronized void updateDynamicConfig() {
-        Log.i(TAG, "Approov dynamic configuration updated");
-        putApproovDynamicConfig(Approov.fetchConfig());
-    }
-
-    /**
-     * Stores an application's dynamic configuration string in non-volatile storage.
-     *
-     * The default implementation stores the string in shared preferences, and setting
-     * the config string to null is equivalent to removing the config.
-     *
-     * @param config a config string
-     */
-    protected void putApproovDynamicConfig(String config) {
-        SharedPreferences prefs = appContext.getSharedPreferences(APPROOV_PREFS, 0);
-        SharedPreferences.Editor editor = prefs.edit();
-        editor.putString(APPROOV_CONFIG, config);
-        editor.apply();
-    }
-
-    /**
-     * Returns the application's dynamic configuration string from non-volatile storage.
-     *
-     * The default implementation retrieves the string from shared preferences.
-     *
-     * @return config string, or null if not present
-     */
-    protected String getApproovDynamicConfig() {
-        SharedPreferences prefs = appContext.getSharedPreferences(APPROOV_PREFS, 0);
-        return prefs.getString(APPROOV_CONFIG, null);
     }
 
     /**
@@ -197,7 +147,6 @@ public class ApproovService {
         bindingHeader = header;
     }
 
-
     /**
      * Gets any current binding header.
      *
@@ -216,11 +165,172 @@ public class ApproovService {
     public synchronized BaseHttpStack getBaseHttpStack() {
         return hurlStack;
     }
+
+    /**
+     * Potentially substitutes a header value in the map supplied. This determines if the given
+     * substitution header is present and, if so, looks at the present value and determines if it
+     * corresponds to a key of a secure string. If so then the header value is remapped to the secure
+     * string value. A required prefix may be specified to deal with cases such as the use of
+     * "Bearer " prefixed before values in an authorization header. If the attestation fails for
+     * any reason then an ApproovException is thrown. This will be ApproovRejectionException if
+     * the app has failed Approov checks or ApproovNetworkException for networking issues where a
+     * user initiated retry of the operation should be allowed. Note that this function should only
+     * be called by a request getHeaders function that provides the ephemeral header values, as
+     * the output should not be cached.
+     *
+     * @param headers are the defined headers to be updated
+     * @param substitutionHeader is the name of any header whose value may be substituted
+     * @param requiredPrefix is any required prefix to the value being substituted or null if not required
+     * @throws ApproovException if here was a problem
+     */
+    public static void substituteHeader(Map<String, String> headers, String substitutionHeader,
+                                        String requiredPrefix) throws ApproovException {
+        String prefix = requiredPrefix;
+        if (prefix == null)
+            prefix = "";
+        String value = headers.get(substitutionHeader);
+        if ((value != null) && value.startsWith(prefix) && (value.length() > prefix.length())) {
+            // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
+            Approov.TokenFetchResult approovResults;
+            try {
+                approovResults = Approov.fetchSecureStringAndWait(value.substring(prefix.length()), null);
+                Log.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus().toString());
+            }
+            catch (IllegalStateException e) {
+                throw new ApproovException("IllegalState: " + e.getMessage());
+            }
+            catch (IllegalArgumentException e) {
+                throw new ApproovException("IllegalArgument: " + e.getMessage());
+            }
+
+            // process the returned Approov status
+            if (approovResults.getStatus() == Approov.TokenFetchStatus.SUCCESS)
+                // overwrite the request header with the new value
+                headers.put(substitutionHeader, prefix + approovResults.getSecureString());
+            else if (approovResults.getStatus() == Approov.TokenFetchStatus.REJECTED)
+                // if the request is rejected then we provide a special exception with additional information
+                throw new ApproovRejectionException("Header substitution for " + substitutionHeader + ": " +
+                        approovResults.getStatus().toString() + ": " + approovResults.getARC() +
+                        " " + approovResults.getRejectionReasons(),
+                        approovResults.getARC(), approovResults.getRejectionReasons());
+            else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+                // we are unable to get the secure string due to network conditions so the request can
+                // be retried by the user later
+                throw new ApproovNetworkException("Header substitution for " + substitutionHeader + ": " +
+                        approovResults.getStatus().toString());
+            else if (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_KEY)
+                // we have failed to get a secure string with a more serious permanent error
+                throw new ApproovException("Header substitution for " + substitutionHeader + ": " +
+                        approovResults.getStatus().toString());
+        }
+    }
+
+    /**
+     * Fetches a secure string with the given key. If newDef is not null then a
+     * secure string for the particular app instance may be defined. In this case the
+     * new value is returned as the secure string. Use of an empty string for newDef removes
+     * the string entry. Note that this call may require network transaction and thus may block
+     * for some time, so should not be called from the UI thread. If the attestation fails
+     * for any reason then an ApproovException is thrown. This will be ApproovRejectionException
+     * if the app has failed Approov checks or ApproovNetworkException for networking issues where
+     * a user initiated retry of the operation should be allowed. Note that the returned string
+     * should NEVER be cached by your app, you should call this function when it is needed.
+     *
+     * @param key is the secure string key to be looked up
+     * @param newDef is any new definition for the secure string, or null for lookup only
+     * @return secure string (should not be cached by your app) or null if it was not defined
+     * @throws ApproovException if here was a problem
+     */
+    public static String fetchSecureString(String key, String newDef) throws ApproovException {
+        // determine the type of operation as the values themselves cannot be logged
+        String type = "lookup";
+        if (newDef != null)
+            type = "definition";
+
+        // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
+        Approov.TokenFetchResult approovResults;
+        try {
+            approovResults = Approov.fetchSecureStringAndWait(key, newDef);
+            Log.d(TAG, "fetchSecureString " + type + ": " + key + ", " + approovResults.getStatus().toString());
+        }
+        catch (IllegalStateException e) {
+            throw new ApproovException("IllegalState: " + e.getMessage());
+        }
+        catch (IllegalArgumentException e) {
+                throw new ApproovException("IllegalArgument: " + e.getMessage());
+        }
+
+        // process the returned Approov status
+        if (approovResults.getStatus() == Approov.TokenFetchStatus.REJECTED)
+            // if the request is rejected then we provide a special exception with additional information
+            throw new ApproovRejectionException("fetchSecureString " + type + " for " + key + ": " +
+                    approovResults.getStatus().toString() + ": " + approovResults.getARC() +
+                    " " + approovResults.getRejectionReasons(),
+                    approovResults.getARC(), approovResults.getRejectionReasons());
+        else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+            // we are unable to get the secure string due to network conditions so the request can
+            // be retried by the user later
+            throw new ApproovNetworkException("fetchSecureString " + type + " for " + key + ":" +
+                    approovResults.getStatus().toString());
+        else if ((approovResults.getStatus() != Approov.TokenFetchStatus.SUCCESS) &&
+                (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_KEY))
+            // we are unable to get the secure string due to a more permanent error
+            throw new ApproovException("fetchSecureString " + type + " for " + key + ":" +
+                    approovResults.getStatus().toString());
+        return approovResults.getSecureString();
+    }
+
+    /**
+     * Fetches a custom JWT with the given payload. Note that this call will require network
+     * transaction and thus will block for some time, so should not be called from the UI thread.
+     * If the attestation fails for any reason then an IOException is thrown. This will be
+     * ApproovRejectionException if the app has failed Approov checks or ApproovNetworkException
+     * for networking issues where a user initiated retry of the operation should be allowed.
+     *
+     * @param payload is the marshaled JSON object for the claims to be included
+     * @return custom JWT string
+     * @throws ApproovException if here was a problem
+     */
+    public static String fetchCustomJWT(String payload) throws ApproovException {
+        // fetch the custom JWT catching any exceptions the SDK might throw
+        Approov.TokenFetchResult approovResults;
+        try {
+            approovResults = Approov.fetchCustomJWTAndWait(payload);
+            Log.d(TAG, "fetchCustomJWT: " + approovResults.getStatus().toString());
+        }
+        catch (IllegalStateException e) {
+            throw new ApproovException("IllegalState: " + e.getMessage());
+        }
+        catch (IllegalArgumentException e) {
+            throw new ApproovException("IllegalArgument: " + e.getMessage());
+        }
+
+        // process the returned Approov status
+        if (approovResults.getStatus() == Approov.TokenFetchStatus.REJECTED)
+            // if the request is rejected then we provide a special exception with additional information
+            throw new ApproovRejectionException("fetchCustomJWT: "+ approovResults.getStatus().toString() + ": " +
+                    approovResults.getARC() +  " " + approovResults.getRejectionReasons(),
+                    approovResults.getARC(), approovResults.getRejectionReasons());
+        else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+            // we are unable to get the custom JWT due to network conditions so the request can
+            // be retried by the user later
+            throw new ApproovNetworkException("fetchCustomJWT: " + approovResults.getStatus().toString());
+        else if (approovResults.getStatus() != Approov.TokenFetchStatus.SUCCESS)
+            // we are unable to get the custom JWT due to a more permanent error
+            throw new ApproovException("fetchCustomJWT: " + approovResults.getStatus().toString());
+        return approovResults.getToken();
+    }
 }
 
 /**
- * Callback handler for prefetching an Approov token. We simply log as we don't need the token
- * itself, as it will be returned as a cached value on a subsequent token fetch.
+ * Callback handler for prefetching from Approov. We simply log as we don't need the result
+ * itself, as it will be returned as a cached value on a subsequent etch.
  */
 final class PrefetchCallbackHandler implements Approov.TokenFetchCallback {
     // logging tag
@@ -229,9 +339,9 @@ final class PrefetchCallbackHandler implements Approov.TokenFetchCallback {
     @Override
     public void approovCallback(Approov.TokenFetchResult pResult) {
         if (pResult.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL)
-            Log.i(TAG, "Approov prefetch success");
+            Log.d(TAG, "Approov prefetch success");
         else
-            Log.i(TAG, "Approov prefetch failure: " + pResult.getStatus().toString());
+            Log.e(TAG, "Approov prefetch failure: " + pResult.getStatus().toString());
     }
 }
 
@@ -286,7 +396,7 @@ final class ApproovHurlStack extends HurlStack {
     @Override
     public HttpResponse executeRequest(Request<?> request, Map<String, String> additionalHeaders)
             throws IOException, AuthFailureError {
-        // we don't modify the map by default
+        // we don't modify the headers by default
         Map<String, String> headers = additionalHeaders;
 
         // update the data hash based on any token binding header available from "getHeaders()"
@@ -299,16 +409,13 @@ final class ApproovHurlStack extends HurlStack {
         }
 
         // request an Approov token for the domain
-        Approov.TokenFetchResult approovResults = Approov.fetchApproovTokenAndWait(request.getUrl());
+        String url = request.getUrl();
+        Approov.TokenFetchResult approovResults = Approov.fetchApproovTokenAndWait(url);
 
         // provide information about the obtained token or error (note "approov token -check" can
         // be used to check the validity of the token and if you use token annotations they
         // will appear here to determine why a request is being rejected)
-        Log.i(TAG, "Approov Token for " + request.getUrl() + ": " + approovResults.getLoggableToken());
-
-        // update any dynamic configuration
-        if (approovResults.isConfigChanged())
-            approovService.updateDynamicConfig();
+        Log.d(TAG, "Token for " + request.getUrl() + ": " + approovResults.getLoggableToken());
 
         // check the status of Approov token fetch
         if (approovResults.getStatus() == Approov.TokenFetchStatus.SUCCESS) {
@@ -317,12 +424,17 @@ final class ApproovHurlStack extends HurlStack {
             headers = new HashMap<>(additionalHeaders);
             headers.put(approovService.getApproovHeader(), approovService.getApproovPrefix() + approovResults.getToken());
         }
+        else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+            // we are unable to get an Approov token due to network conditions so the request can
+            // be retried by the user later
+            throw new ApproovNetworkException("Approov token fetch for " + url + " failed: " + approovResults.getStatus().toString());
         else if ((approovResults.getStatus() != Approov.TokenFetchStatus.NO_APPROOV_SERVICE) &&
                 (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_URL) &&
                 (approovResults.getStatus() != Approov.TokenFetchStatus.UNPROTECTED_URL)) {
-            // we have failed to get an Approov token in such a way that there is no point in proceeding
-            // with the request - generally a retry is needed, unless the error is permanent
-            throw new IOException("Approov token fetch failed: " + approovResults.getStatus().toString());
+            // we have failed to get an Approov token with a more serious permanent error
+            throw new ApproovException("Approov token fetch for " + url + " failed: " + approovResults.getStatus().toString());
         }
 
         // delegate the execution of the request to the parent handler
@@ -364,12 +476,17 @@ final class PinningHostnameVerifier implements HostnameVerifier {
         if (delegate.verify(hostname, session)) try {
             // extract the set of valid pins for the hostname
             Set<String> hostPins = new HashSet<>();
-            Map<String, List<String>> pins = Approov.getPins("public-key-sha256");
-            for (Map.Entry<String, List<String>> entry: pins.entrySet()) {
-                if (entry.getKey().equals(hostname)) {
-                    for (String pin: entry.getValue())
-                        hostPins.add(pin);
-                }
+            Map<String, List<String>> allPins = Approov.getPins("public-key-sha256");
+            List<String> pins = allPins.get(hostname);
+            if ((pins != null) && pins.isEmpty())
+                // if there are no pins associated with the hostname domain then we use any pins
+                // associated with the "*" domain for managed trust roots (note we do not
+                // apply this to domains that are not added at all)
+                pins = allPins.get("*");
+            if (pins != null) {
+                // convert the list of pins into a set
+                for (String pin: pins)
+                    hostPins.add(pin);
             }
 
             // if there are no pins then we accept any certificate
