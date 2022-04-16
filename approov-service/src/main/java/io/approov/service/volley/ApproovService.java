@@ -37,6 +37,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.HostnameVerifier;
@@ -59,6 +61,10 @@ public class ApproovService {
     // alternative http stack to be used that adds token and pinning, or null if could not be initialized
     private ApproovHurlStack hurlStack;
 
+    // true if the interceptor should proceed on network failures and not add an
+    // Approov token
+    private boolean proceedOnNetworkFail;
+
     // header to be used to send Approov tokens
     private String approovTokenHeader;
 
@@ -72,15 +78,17 @@ public class ApproovService {
      * Creates an Approov service.
      *
      * @param context the Application context
-     * @param config the initial service config string
+     * @param config the initial service config string, or empty for no initialization
      */
     public ApproovService(Context context, String config) {
         // initialize the Approov SDK
         approovTokenHeader = APPROOV_TOKEN_HEADER;
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         bindingHeader = null;
+        proceedOnNetworkFail = false;
         try {
-            Approov.initialize(context, config, "auto", null);
+            if (config.length() != 0)
+                Approov.initialize(context, config, "auto", null);
             Approov.setUserProperty("approov-service-volley");
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Approov initialization failed: " + e.getMessage());
@@ -89,6 +97,28 @@ public class ApproovService {
 
         // create an alternative hurlstack to use
         hurlStack = new ApproovHurlStack(this);
+    }
+
+    /**
+     * Sets a flag indicating if the network interceptor should proceed anyway if it is
+     * not possible to obtain an Approov token due to a networking failure. If this is set
+     * then your backend API can receive calls without the expected Approov token header
+     * being added, or without header/query parameter substitutions being made.
+     *
+     * @param proceed is true if Approov networking fails should allow continuation
+     */
+    public synchronized void setProceedOnNetworkFail(boolean proceed) {
+        proceedOnNetworkFail = proceed;
+    }
+
+    /**
+     * Gtes the flag indicating if the network interceptor should proceed anyway if it is
+     * not possible to obtain an Approov token due to a networking failure.
+     *
+     * @return true if Approov networking fails should allow continuation
+     */
+    synchronized boolean getProceedOnNetworkFail() {
+        return proceedOnNetworkFail;
     }
 
     /**
@@ -266,6 +296,111 @@ public class ApproovService {
                 throw new ApproovException("Header substitution for " + substitutionHeader + ": " +
                         approovResults.getStatus().toString());
         }
+    }
+
+    /**
+     * Potentially substitutes a parameter value in the map supplied. This determines if the given
+     * substitution query parameter is present and, if so, looks at the present value and determines if it
+     * corresponds to a key of a secure string. If so then the parameter value is remapped to the secure
+     * string value. If the attestation fails for any reason then an ApproovException is thrown. This
+     * will be ApproovRejectionException if the app has failed Approov checks or ApproovNetworkException
+     * for networking issues where a user initiated retry of the operation should be allowed. Note that
+     * this function should only be called by a request getParams function that provides the ephemeral
+     * params values, as the output should not be cached.
+     *
+     * @param params are the defined params to be updated
+     * @param queryParam is the name of any parameter whose value may be substituted
+     * @throws ApproovException if here was a problem
+     */
+    public static void substituteQueryParam(Map<String, String> params, String queryParam) throws ApproovException {
+        String value = params.get(queryParam);
+        if (value != null) {
+            // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
+            Approov.TokenFetchResult approovResults;
+            try {
+                approovResults = Approov.fetchSecureStringAndWait(value, null);
+                Log.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus().toString());
+            }
+            catch (IllegalStateException e) {
+                throw new ApproovException("IllegalState: " + e.getMessage());
+            }
+            catch (IllegalArgumentException e) {
+                throw new ApproovException("IllegalArgument: " + e.getMessage());
+            }
+
+            // process the returned Approov status
+            if (approovResults.getStatus() == Approov.TokenFetchStatus.SUCCESS)
+                // overwrite the parameter with the new value
+                params.put(queryParam, approovResults.getSecureString());
+            else if (approovResults.getStatus() == Approov.TokenFetchStatus.REJECTED)
+                // if the request is rejected then we provide a special exception with additional information
+                throw new ApproovRejectionException("Query param substitution for " + queryParam + ": " +
+                        approovResults.getStatus().toString() + ": " + approovResults.getARC() +
+                        " " + approovResults.getRejectionReasons(),
+                        approovResults.getARC(), approovResults.getRejectionReasons());
+            else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+                // we are unable to get the secure string due to network conditions so the request can
+                // be retried by the user later
+                throw new ApproovNetworkException("Query param substitution for " + queryParam + ": " +
+                        approovResults.getStatus().toString());
+            else if (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_KEY)
+                // we have failed to get a secure string with a more serious permanent error
+                throw new ApproovException("Query param substitution for " + queryParam + ": " +
+                        approovResults.getStatus().toString());
+        }
+    }
+
+    /**
+     * Substitutes the given query parameter in the URL. If no substitution is made then the
+     * original URL is returned, otherwise a new one is constructed with the revised query
+     * parameter value. Since this modifies the URL itself this must be done before opening the
+     * HttpsURLConnection. If it is not currently possible to fetch secure strings token due to
+     * networking issues then ApproovNetworkException is thrown and a user initiated retry of the
+     * operation should be allowed. ApproovRejectionException may be thrown if the attestation
+     * fails and secure strings cannot be obtained. Other ApproovExecptions represent a more
+     * permanent error condition.
+     *
+     * @param url is the URL being analyzed for substitution
+     * @param queryParameter is the parameter to be potentially substituted
+     * @return URL passed in, or modified with a new URL if required
+     * @throws ApproovException if it is not possible to obtain secure strings for substitution
+     */
+    public static String substituteQueryParamInURLString(String url, String queryParameter) throws ApproovException {
+        Pattern pattern = Pattern.compile("[\\?&]"+queryParameter+"=([^&;]+)");
+        String urlString = url.toString();
+        Matcher matcher = pattern.matcher(urlString);
+        if (matcher.find()) {
+            // we have found an occurrence of the query parameter to be replaced so we look up the existing
+            // value as a key for a secure string
+            String queryValue = matcher.group(1);
+            Approov.TokenFetchResult approovResults = Approov.fetchSecureStringAndWait(queryValue, null);
+            Log.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
+            if (approovResults.getStatus() == Approov.TokenFetchStatus.SUCCESS) {
+                // perform a query substitution
+                return new StringBuilder(urlString).replace(matcher.start(1),
+                            matcher.end(1), approovResults.getSecureString()).toString();
+            }
+            else if (approovResults.getStatus() == Approov.TokenFetchStatus.REJECTED)
+                // if the request is rejected then we provide a special exception with additional information
+                throw new ApproovRejectionException("Query parameter substitution for " + queryParameter + ": " +
+                        approovResults.getStatus().toString() + ": " + approovResults.getARC() +
+                        " " + approovResults.getRejectionReasons(),
+                        approovResults.getARC(), approovResults.getRejectionReasons());
+            else if ((approovResults.getStatus() == Approov.TokenFetchStatus.NO_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
+                    (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
+                // we are unable to get the secure string due to network conditions so the request can
+                // be retried by the user later
+                throw new ApproovNetworkException("Query parameter substitution for " + queryParameter + ": " +
+                            approovResults.getStatus().toString());
+            else if (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_KEY)
+                // we have failed to get a secure string with a more serious permanent error
+                throw new ApproovException("Query parameter substitution for " + queryParameter + ": " +
+                        approovResults.getStatus().toString());
+        }
+        return url;
     }
 
     /**
@@ -469,8 +604,9 @@ final class ApproovHurlStack extends HurlStack {
                 (approovResults.getStatus() == Approov.TokenFetchStatus.POOR_NETWORK) ||
                 (approovResults.getStatus() == Approov.TokenFetchStatus.MITM_DETECTED))
             // we are unable to get an Approov token due to network conditions so the request can
-            // be retried by the user later
-            throw new ApproovNetworkException("Approov token fetch for " + url + " failed: " + approovResults.getStatus().toString());
+            // be retried by the user later - unless overridden
+            if (!approovService.getProceedOnNetworkFail())
+                throw new ApproovNetworkException("Approov token fetch for " + url + " failed: " + approovResults.getStatus().toString());
         else if ((approovResults.getStatus() != Approov.TokenFetchStatus.NO_APPROOV_SERVICE) &&
                 (approovResults.getStatus() != Approov.TokenFetchStatus.UNKNOWN_URL) &&
                 (approovResults.getStatus() != Approov.TokenFetchStatus.UNPROTECTED_URL)) {
