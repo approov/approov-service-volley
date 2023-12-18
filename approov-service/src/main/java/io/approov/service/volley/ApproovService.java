@@ -127,13 +127,37 @@ public class ApproovService {
     }
 
     /**
-     * Gtes the flag indicating if the network interceptor should proceed anyway if it is
+     * Gets the flag indicating if the network interceptor should proceed anyway if it is
      * not possible to obtain an Approov token due to a networking failure.
      *
      * @return true if Approov networking fails should allow continuation
      */
     static synchronized boolean getProceedOnNetworkFail() {
         return proceedOnNetworkFail;
+    }
+
+   /**
+     * Sets a development key indicating that the app is a development version and it should
+     * pass attestation even if the app is not registered or it is running on an emulator. The
+     * development key value can be rotated at any point in the account if a version of the app
+     * containing the development key is accidentally released. This is primarily
+     * used for situations where the app package must be modified or resigned in
+     * some way as part of the testing process.
+     *
+     * @param devKey is the development key to be used
+     * @throws ApproovException if there was a problem
+     */
+    public static synchronized void setDevKey(String devKey) throws ApproovException {
+        try {
+            Approov.setDevKey(devKey);
+            Log.d(TAG, "setDevKey");
+        }
+        catch (IllegalStateException e) {
+            throw new ApproovException("IllegalState: " + e.getMessage());
+        }
+        catch (IllegalArgumentException e) {
+            throw new ApproovException("IllegalArgument: " + e.getMessage());
+        }
     }
 
     /**
