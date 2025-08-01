@@ -6,15 +6,15 @@ plugins {
 repositories {
     mavenCentral()
     google()
-    jcenter()
 }
 
 android {
-    compileSdkVersion 30
+    namespace = 'io.approov.service.volley'
+    compileSdk 34
 
     defaultConfig {
-        minSdkVersion 21
-        targetSdkVersion 28
+        minSdkVersion 23
+        targetSdkVersion 34
     }
 
     buildTypes {
