@@ -29,8 +29,8 @@ jobs:
       uses: actions/setup-java@v3
       with:
         distribution: 'temurin' # Use Eclipse Temurin distribution
-        java-version: '11'      # Use Java 11 for Android builds
-    
+        java-version: '21'      # Use Java 21 for Android builds
+
     - name: Install Android SDK
       run: |
           sudo apt-get update
