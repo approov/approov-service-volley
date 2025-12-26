@@ -588,10 +588,10 @@ public class ApproovService {
             Log.d(TAG, "setInstallAttrsInToken");
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "setInstallAttrsInToken failed with IllegalArgument: " + e.getMessage());
-            throw new ApproovException(e);
+            throw new ApproovException("Illegal Argument: " + e.getMessage());
         } catch (IllegalStateException e) {
             Log.e(TAG, "setInstallAttrsInToken failed with IllegalState: " + e.getMessage());
-            throw new ApproovException(e);
+            throw new ApproovException("Illegal State: " + e.getMessage());
         }
     }
 
