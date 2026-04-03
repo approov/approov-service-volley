@@ -26,6 +26,8 @@ final class ApproovTestSupport {
 
     static void resetApproovServiceState() {
         setStaticField("hurlStack", null);
+        setStaticField("isInitialized", false);
+        setStaticField("configString", null);
         setStaticField("proceedOnNetworkFail", false);
         setStaticField("useApproovStatusIfNoToken", false);
         setStaticField("approovTokenHeader", null);
@@ -41,7 +43,13 @@ final class ApproovTestSupport {
         approov.when(() -> Approov.getPins("public-key-sha256")).thenReturn(new HashMap<>());
         Context context = mock(Context.class);
         when(context.getApplicationContext()).thenReturn(context);
-        ApproovService.initialize(context, "");
+        ApproovService.initialize(context, "", "reinit-tests");
+    }
+
+    static Context mockContext() {
+        Context context = mock(Context.class);
+        when(context.getApplicationContext()).thenReturn(context);
+        return context;
     }
 
     static Approov.TokenFetchResult tokenResult(Approov.TokenFetchStatus status) {

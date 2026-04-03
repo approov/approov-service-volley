@@ -66,6 +66,12 @@ public class ApproovService {
     // alternative http stack to be used that adds token and pinning, or null if could not be initialized
     private static ApproovHurlStack hurlStack = null;
 
+    // true if the service layer has been successfully initialized
+    private static boolean isInitialized = false;
+
+    // configuration string used for the current initialization
+    private static String configString = null;
+
     // true if the request stack should proceed on network failures and not add an
     // Approov token. Retained only for legacy behaviour.
     private static boolean proceedOnNetworkFail = false;
@@ -99,13 +105,25 @@ public class ApproovService {
     }
 
     /**
-     * Initializes the ApproovService with an account configuration.
+     * Initializes the ApproovService with an account configuration and comment.
      *
      * @param context the Application context
      * @param config the configuration string, or empty for no SDK initialization
+     * @param comment the comment string, or empty for no comment
      */
-    public static void initialize(Context context, String config) {
+    public static synchronized void initialize(Context context, String config, String comment) {
+        if (isInitialized && !comment.startsWith("reinit")) {
+            if (!config.equals(configString)) {
+                throw new IllegalStateException("ApproovService layer is already initialized");
+            }
+            Log.d(TAG, "Ignoring multiple ApproovService layer initializations with the same config");
+            return;
+        }
+
         // initialize the Approov SDK
+        hurlStack = null;
+        isInitialized = false;
+        configString = null;
         approovTokenHeader = APPROOV_TOKEN_HEADER;
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         approovTraceIDHeader = APPROOV_TRACE_ID_HEADER;
@@ -116,15 +134,30 @@ public class ApproovService {
         serviceMutator = ApproovServiceMutator.DEFAULT;
         try {
             if (config.length() != 0)
-                Approov.initialize(context, config, "auto", null);
-            Approov.setUserProperty("approov-service-volley");
+                Approov.initialize(context.getApplicationContext(), config, "auto", comment);
         } catch (IllegalArgumentException e) {
             Log.e(TAG, "Approov initialization failed: " + e.getMessage());
-            return;
+            throw e;
+        } catch (IllegalStateException e) {
+            Log.e(TAG, "Approov already intialized: Ignoring native layer exception " + e.getMessage());
         }
+
+        Approov.setUserProperty("approov-service-volley");
 
         // create an alternative hurlstack to use
         hurlStack = new ApproovHurlStack();
+        isInitialized = true;
+        configString = config;
+    }
+
+    /**
+     * Initializes the ApproovService with an account configuration.
+     *
+     * @param context the Application context
+     * @param config the configuration string, or empty for no SDK initialization
+     */
+    public static void initialize(Context context, String config) {
+        initialize(context, config, "");
     }
 
     /**

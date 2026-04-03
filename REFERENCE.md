@@ -32,6 +32,16 @@ void initialize(Context context, String config)
 
 Use the application context. Passing an empty config is only appropriate if another Approov service layer in the same app initializes the underlying SDK first.
 
+Calling `initialize(...)` multiple times with the same config is allowed and is ignored after the first successful initialization. Calling it again with a different config throws `IllegalStateException`.
+
+An overload is also available when you need to pass SDK initialization comments such as a `reinit...` marker while reusing an already initialized native SDK from another Approov service layer:
+
+```java
+void initialize(Context context, String config, String comment)
+```
+
+If initialization fails, `getBaseHttpStack()` remains `null`, so `Volley.newRequestQueue(context, ApproovService.getBaseHttpStack())` continues to operate with the standard Volley stack and without Approov request processing.
+
 ## setServiceMutator
 
 Installs the active `ApproovServiceMutator`.

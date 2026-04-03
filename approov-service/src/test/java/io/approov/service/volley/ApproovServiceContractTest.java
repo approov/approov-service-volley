@@ -8,6 +8,8 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mockStatic;
 
+import android.content.Context;
+
 import com.android.volley.toolbox.BaseHttpStack;
 import com.criticalblue.approovsdk.Approov;
 
@@ -52,6 +54,73 @@ public class ApproovServiceContractTest {
             assertNull(ApproovTestSupport.getStaticField("approovTraceIDHeader", String.class));
             assertTrue(ApproovService.getUseApproovStatusIfNoToken());
             approov.verify(() -> Approov.setUserProperty("approov-service-volley"));
+        }
+    }
+
+    @Test
+    public void initializeIgnoresDuplicateCallsWithSameConfig() {
+        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
+            Context context = ApproovTestSupport.mockContext();
+
+            ApproovService.initialize(context, "config-a");
+            BaseHttpStack firstStack = ApproovService.getBaseHttpStack();
+            ApproovService.initialize(context, "config-a");
+
+            assertNotNull(firstStack);
+            assertEquals(firstStack, ApproovService.getBaseHttpStack());
+            approov.verify(() -> Approov.initialize(context, "config-a", "auto", ""));
+        }
+    }
+
+    @Test
+    public void initializeThrowsForDifferentConfigAfterSuccess() {
+        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
+            Context context = ApproovTestSupport.mockContext();
+
+            ApproovService.initialize(context, "config-a");
+            IllegalStateException error = assertThrows(
+                    IllegalStateException.class,
+                    () -> ApproovService.initialize(context, "config-b"));
+
+            assertEquals("ApproovService layer is already initialized", error.getMessage());
+            approov.verify(() -> Approov.initialize(context, "config-a", "auto", ""));
+        }
+    }
+
+    @Test
+    public void initializeAllowsReinitCommentWhenNativeSdkIsAlreadyInitialized() {
+        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
+            Context context = ApproovTestSupport.mockContext();
+            approov.when(() -> Approov.initialize(context, "config-a", "auto", "reinit-tests"))
+                    .thenThrow(new IllegalStateException("already initialized"));
+
+            ApproovService.initialize(context, "config-a", "reinit-tests");
+
+            assertNotNull(ApproovService.getBaseHttpStack());
+            assertTrue(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
+            assertEquals("config-a", ApproovTestSupport.getStaticField("configString", String.class));
+            approov.verify(() -> Approov.setUserProperty("approov-service-volley"));
+        }
+    }
+
+    @Test
+    public void initializeFailureClearsApproovStackAndLeavesPlainVolleyFallback() {
+        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
+            Context context = ApproovTestSupport.mockContext();
+            ApproovService.initialize(context, "config-a");
+            assertNotNull(ApproovService.getBaseHttpStack());
+
+            approov.when(() -> Approov.initialize(context, "config-a", "auto", "reinit-bad"))
+                    .thenThrow(new IllegalArgumentException("bad config"));
+
+            IllegalArgumentException error = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> ApproovService.initialize(context, "config-a", "reinit-bad"));
+
+            assertEquals("bad config", error.getMessage());
+            assertNull(ApproovService.getBaseHttpStack());
+            assertFalse(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
+            assertNull(ApproovTestSupport.getStaticField("configString", String.class));
         }
     }
 
