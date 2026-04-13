@@ -72,9 +72,6 @@ public class ApproovService {
     // configuration string used for the current initialization
     private static String configString = null;
 
-    // true if the request stack should proceed on network failures and not add an
-    // Approov token. Retained only for legacy behaviour.
-    private static boolean proceedOnNetworkFail = false;
 
     // true if the fetch status should be sent as the Approov token header value
     // when a request is allowed to proceed but no real token is available
@@ -129,7 +126,6 @@ public class ApproovService {
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         approovTraceIDHeader = APPROOV_TRACE_ID_HEADER;
         bindingHeader = null;
-        proceedOnNetworkFail = false;
         useApproovStatusIfNoToken = false;
         exclusionURLRegexs = new HashMap<>();
         serviceMutator = ApproovServiceMutator.DEFAULT;
@@ -163,32 +159,23 @@ public class ApproovService {
 
     /**
      * Sets a flag indicating if the network interceptor should proceed anyway if it is
-     * not possible to obtain an Approov token due to a networking failure. If this is set
-     * then your backend API can receive calls without the expected Approov token header
-     * being added, or without header/query parameter substitutions being made. Note that
-     * this should be used with caution because it may allow a connection to be established
-     * before any dynamic pins have been received via Approov, thus potentially opening the
-     * channel to a MitM.
+     * not possible to obtain an Approov token due to a networking failure.
      *
      * @param proceed is true if Approov networking fails should allow continuation
-     * @deprecated Use setServiceMutator to control this behavior
+     * @deprecated Use an ApproovServiceMutator to override standard fallback behavior.
+     * This method is retained for compatibility but does nothing.
      */
     @Deprecated
     public static synchronized void setProceedOnNetworkFail(boolean proceed) {
-        Log.d(TAG, "setProceedOnNetworkFail " + proceed);
-        proceedOnNetworkFail = proceed;
+        Log.d(TAG, "setProceedOnNetworkFail is deprecated and does nothing.");
     }
 
     /**
-     * Gets the flag indicating if the network interceptor should proceed anyway if it is
-     * not possible to obtain an Approov token due to a networking failure.
-     *
-     * @return true if Approov networking fails should allow continuation
-     * @deprecated Use ApproovServiceMutator to control this behavior
+     * @deprecated Always returns false.
      */
     @Deprecated
     static synchronized boolean getProceedOnNetworkFail() {
-        return proceedOnNetworkFail;
+        return false;
     }
 
     /**
