@@ -23,16 +23,16 @@ jobs:
       run: git config --global --add safe.directory '*'
       
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
+      with:
+        path: approov-service-volley
 
     - name: Checkout Core Testing Framework
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         repository: approov/core-service-layers-testing
-        path: _core_testing
-
-    - name: Move Framework to Parent Directory
-      run: mv _core_testing ../core-service-layers-testing
+        token: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT }}
+        path: core-service-layers-testing
 
     - name: Set Up Java
       uses: actions/setup-java@v4
@@ -80,15 +80,19 @@ jobs:
         echo -e "trust\n5\ny\nquit" | gpg --batch --yes --command-fd 0 --edit-key $KEY_ID
     
     - name: Run Tests
+      working-directory: approov-service-volley
       run: ./gradlew test
 
     - name: Build AAR
+      working-directory: approov-service-volley
       run: ./gradlew assembleRelease
 
     - name: Create Package
+      working-directory: approov-service-volley
       run: cd .maven && ./build-and-sign.sh
 
     - name: Publish Package
+      working-directory: approov-service-volley
       run: cd .maven && ./maven-publish.sh
       
     - name: Upload Artifact
