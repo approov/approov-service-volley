@@ -29,7 +29,10 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: approov/core-service-layers-testing
-        path: ../core-service-layers-testing
+        path: _core_testing
+
+    - name: Move Framework to Parent Directory
+      run: mv _core_testing ../core-service-layers-testing
 
     - name: Set Up Java
       uses: actions/setup-java@v4
