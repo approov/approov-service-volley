@@ -43,7 +43,7 @@ final class ApproovTestSupport {
         approov.when(() -> Approov.getPins("public-key-sha256")).thenReturn(new HashMap<>());
         Context context = mock(Context.class);
         when(context.getApplicationContext()).thenReturn(context);
-        ApproovService.initialize(context, "", "reinit-tests");
+        ApproovService.initialize(context, "dummy-config", "reinit-tests");
     }
 
     static Context mockContext() {

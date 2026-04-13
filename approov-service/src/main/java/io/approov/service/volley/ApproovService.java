@@ -112,7 +112,8 @@ public class ApproovService {
      * @param comment the comment string, or empty for no comment
      */
     public static synchronized void initialize(Context context, String config, String comment) {
-        if (isInitialized && !comment.startsWith("reinit")) {
+        boolean allowEnableAfterEmptyInitialization = isInitialized && (configString != null) && configString.isEmpty() && !config.isEmpty();
+        if (isInitialized && !comment.startsWith("reinit") && !allowEnableAfterEmptyInitialization) {
             if (!config.equals(configString)) {
                 throw new IllegalStateException("ApproovService layer is already initialized");
             }
@@ -210,6 +211,17 @@ public class ApproovService {
      */
     public static synchronized boolean getUseApproovStatusIfNoToken() {
         return useApproovStatusIfNoToken;
+    }
+
+    /**
+     * Indicates whether Approov protection is enabled for this service layer
+     * instance. If initialization used an empty config string then the layer is
+     * initialized but Approov protection is bypassed.
+     *
+     * @return true if Approov protection is enabled, false otherwise
+     */
+    static synchronized boolean isApproovEnabled() {
+        return isInitialized && (configString != null) && !configString.isEmpty();
     }
 
    /**
@@ -966,9 +978,14 @@ class ApproovHurlStack extends HurlStack {
     @Override
     public HttpResponse executeRequest(Request<?> request, Map<String, String> additionalHeaders)
             throws IOException, AuthFailureError {
+        
+        if (!ApproovService.isApproovEnabled()) {
+            return executeNetworkRequest(request, additionalHeaders);
+        }
+
         ApproovServiceMutator mutator = ApproovService.getServiceMutator();
         if (!mutator.handleRequestShouldProcess(request, additionalHeaders)) {
-            return super.executeRequest(request, additionalHeaders);
+            return executeNetworkRequest(request, additionalHeaders);
         }
 
         String url = request.getUrl();
