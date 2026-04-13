@@ -28,7 +28,6 @@ final class ApproovTestSupport {
         setStaticField("hurlStack", null);
         setStaticField("isInitialized", false);
         setStaticField("configString", null);
-        setStaticField("proceedOnNetworkFail", false);
         setStaticField("useApproovStatusIfNoToken", false);
         setStaticField("approovTokenHeader", null);
         setStaticField("approovTokenPrefix", null);
