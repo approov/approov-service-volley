@@ -92,7 +92,7 @@ Legacy compatibility API.
 void setProceedOnNetworkFail(boolean proceed)
 ```
 
-**Deprecated:** prefer `setServiceMutator(...)` and implement the policy in `handleRequestFetchTokenResult(...)`.
+**Obsolete / Deprecated:** This method no longer has any effect. It is completely decoupled from the default `ApproovServiceMutator` logic. To change the default fallback behavior on network failures, you must implement a custom mutator via `setServiceMutator(...)`.
 
 ## setUseApproovStatusIfNoToken
 
