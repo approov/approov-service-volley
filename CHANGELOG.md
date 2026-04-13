@@ -29,4 +29,4 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Initializing first with an empty config string and later with a valid non-empty config string now enables Approov at runtime instead of being rejected as a different-config reinitialization.
 
 ### Deprecated
-- `setProceedOnNetworkFail()` and `getProceedOnNetworkFail()` in favor of `setServiceMutator()`.
+- `setProceedOnNetworkFail()` and `getProceedOnNetworkFail()` in favor of `setServiceMutator()`. The `proceedOnNetworkFail` state has been fully decoupled from the default `ApproovServiceMutator` logic. The default mutator now unconditionally throws an `ApproovNetworkException` on `NO_NETWORK`, `POOR_NETWORK`, and `MITM_DETECTED` to provide a secure default fallback behavior, unless cleanly overridden by a custom mutator.
