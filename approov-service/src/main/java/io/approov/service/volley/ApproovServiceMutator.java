@@ -180,7 +180,10 @@ public interface ApproovServiceMutator {
      * @param approovResults the TokenFetchResult from Approov
      * @param url the URL for which the token was requested
      * @return true if request processing should continue through the mutator pipeline,
-     *         false if the request should proceed without any additional Approov changes
+     *         false if no further token-result handling should be applied by this mutator and
+     *         the request should continue through the stack's normal processing; other
+     *         configured stack behavior may still apply, such as adding an Approov status
+     *         header when enabled
      * @throws ApproovException if the request should fail
      */
     @SuppressWarnings("deprecation")
