@@ -214,13 +214,22 @@ public class ApproovService {
     }
 
     /**
+     * Indicates whether the service layer has been initialized.
+     *
+     * @return true if it has been initialized, false otherwise
+     */
+    public static synchronized boolean isInitialized() {
+        return isInitialized;
+    }
+
+    /**
      * Indicates whether Approov protection is enabled for this service layer
      * instance. If initialization used an empty config string then the layer is
      * initialized but Approov protection is bypassed.
      *
      * @return true if Approov protection is enabled, false otherwise
      */
-    static synchronized boolean isApproovEnabled() {
+    public static synchronized boolean isApproovEnabled() {
         return isInitialized && (configString != null) && !configString.isEmpty();
     }
 

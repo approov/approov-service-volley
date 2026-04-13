@@ -30,9 +30,13 @@ Initializes the Approov SDK and enables the Volley integration.
 void initialize(Context context, String config)
 ```
 
-Use the application context. Passing an empty config is only appropriate if another Approov service layer in the same app initializes the underlying SDK first.
+Use the application context.
 
-Calling `initialize(...)` multiple times with the same config is allowed and is ignored after the first successful initialization. Calling it again with a different config throws `IllegalStateException`.
+It is possible to pass an empty `config` string to bypass Approov SDK initialization. In that case the service layer still reports itself as initialized, but any `BaseHttpStack` obtained from it will be `null`, preserving standard Volley request processing without Approov features.
+
+This empty-config mode is intended as a bootstrap or bypass state for advanced integrations. A later call to `initialize()` with a valid non-empty config string is allowed and will then enable the native Approov SDK at runtime. By contrast, reinitializing from one non-empty config string to a different non-empty config string is still rejected unless you are intentionally using a supported same-config `reinit...` flow.
+
+Initialization comments starting with `options:` should be treated as initial-call options, not as a repeated runtime update path. Repeated same-config `options:...` calls may fail at the native SDK level.
 
 An overload is also available when you need to pass SDK initialization comments such as a `reinit...` marker while reusing an already initialized native SDK from another Approov service layer:
 
@@ -41,6 +45,26 @@ void initialize(Context context, String config, String comment)
 ```
 
 If initialization fails, `getBaseHttpStack()` remains `null`, so `Volley.newRequestQueue(context, ApproovService.getBaseHttpStack())` continues to operate with the standard Volley stack and without Approov request processing.
+
+## isInitialized
+
+Returns whether the service layer itself has been initialized.
+
+```java
+boolean isInitialized()
+```
+
+This reports the state of the service layer, not whether Approov protection is currently active. If initialization used an empty `config` string then this returns `true`, while the layer still operates as a plain integration without Approov features.
+
+## isApproovEnabled
+
+Returns whether Approov protection is currently enabled.
+
+```java
+boolean isApproovEnabled()
+```
+
+This returns `true` only if the service layer has been initialized with a valid, non-empty configuration string. If initialized with an empty string, or not initialized at all, it returns `false`.
 
 ## setServiceMutator
 
