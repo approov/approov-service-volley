@@ -136,7 +136,7 @@ public class ApproovService {
             Log.e(TAG, "Approov initialization failed: " + e.getMessage());
             throw e;
         } catch (IllegalStateException e) {
-            Log.e(TAG, "Approov already intialized: Ignoring native layer exception " + e.getMessage());
+            Log.e(TAG, "Approov already initialized: Ignoring native layer exception " + e.getMessage());
         }
 
         Approov.setUserProperty("approov-service-volley");
