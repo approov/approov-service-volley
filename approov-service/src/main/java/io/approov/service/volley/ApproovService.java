@@ -933,7 +933,6 @@ class ApproovHurlStack extends HurlStack {
             case POOR_NETWORK:
             case MITM_DETECTED:
             case NO_APPROOV_SERVICE:
-            case REJECTED:
                 return true;
             default:
                 return false;
