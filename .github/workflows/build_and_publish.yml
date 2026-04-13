@@ -25,6 +25,12 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
 
+    - name: Checkout Core Testing Framework
+      uses: actions/checkout@v4
+      with:
+        repository: approov/core-service-layers-testing
+        path: ../core-service-layers-testing
+
     - name: Set Up Java
       uses: actions/setup-java@v4
       with:
@@ -70,8 +76,11 @@ jobs:
         KEY_ID=$(gpg --list-keys --with-colons | grep pub | cut -d: -f5)
         echo -e "trust\n5\ny\nquit" | gpg --batch --yes --command-fd 0 --edit-key $KEY_ID
     
+    - name: Run Tests
+      run: ./gradlew test
+
     - name: Build AAR
-      run:  ./gradlew assembleRelease
+      run: ./gradlew assembleRelease
 
     - name: Create Package
       run: cd .maven && ./build-and-sign.sh
