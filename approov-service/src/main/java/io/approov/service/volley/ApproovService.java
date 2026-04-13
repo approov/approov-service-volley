@@ -754,6 +754,9 @@ public class ApproovService {
      * @return Approov BaseHttpStack to use, or null if not available
      */
     public static synchronized BaseHttpStack getBaseHttpStack() {
+        if (!isApproovEnabled()) {
+            return null;
+        }
         return hurlStack;
     }
 

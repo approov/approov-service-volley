@@ -472,6 +472,9 @@ public class ApproovServiceMiniSdkTest {
 
     private JSONObject executeRequest(Request<?> request) throws Exception {
         BaseHttpStack stack = ApproovService.getBaseHttpStack();
+        if (stack == null) {
+            stack = new com.android.volley.toolbox.HurlStack();
+        }
         HttpResponse response = stack.executeRequest(request, Collections.emptyMap());
         InputStream in = response.getContent();
         if (in == null) return new JSONObject();
