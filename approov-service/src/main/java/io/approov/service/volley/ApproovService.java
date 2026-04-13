@@ -954,18 +954,25 @@ class ApproovHurlStack extends HurlStack {
      */
     @Override
     protected HttpURLConnection createConnection(URL url) throws IOException {
-        // ensure the connection is pinned (note we assume a https connection here)
-        PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
-        HttpsURLConnection urlConnection = (HttpsURLConnection) url.openConnection();
-        urlConnection.setHostnameVerifier(pinningHostnameVerifier);
+        HttpURLConnection connection = super.createConnection(url);
 
         // Workaround for the M release HttpURLConnection not observing the
         // HttpURLConnection.setFollowRedirects() property.
         // https://code.google.com/p/android/issues/detail?id=194495
-        urlConnection.setInstanceFollowRedirects(HttpURLConnection.getFollowRedirects());
+        connection.setInstanceFollowRedirects(HttpURLConnection.getFollowRedirects());
 
-        // provide the created connection
-        return urlConnection;
+        if (!ApproovService.isApproovEnabled()) {
+            return connection;
+        }
+
+        // ensure the connection is pinned
+        if (connection instanceof HttpsURLConnection) {
+            HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
+            PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
+            httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
+        }
+
+        return connection;
     }
 
     /**
