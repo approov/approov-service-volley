@@ -786,7 +786,14 @@ public class ApproovService {
     public static void substituteHeader(String url, Map<String, String> headers, String substitutionHeader,
                                         String requiredPrefix) throws ApproovException {
         if (!isApproovEnabled()) return;
-        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        Approov.TokenFetchResult urlStatus;
+        try {
+            urlStatus = Approov.fetchApproovTokenAndWait(url);
+        } catch (IllegalStateException e) {
+            throw new ApproovException(e);
+        } catch (IllegalArgumentException e) {
+            throw new ApproovException(e);
+        }
         if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
             urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
             urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
@@ -835,7 +842,14 @@ public class ApproovService {
      */
     public static void substituteQueryParam(String url, Map<String, String> params, String queryParam) throws ApproovException {
         if (!isApproovEnabled()) return;
-        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        Approov.TokenFetchResult urlStatus;
+        try {
+            urlStatus = Approov.fetchApproovTokenAndWait(url);
+        } catch (IllegalStateException e) {
+            throw new ApproovException(e);
+        } catch (IllegalArgumentException e) {
+            throw new ApproovException(e);
+        }
         if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
             urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
             urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
@@ -881,7 +895,14 @@ public class ApproovService {
      */
     public static String substituteQueryParamInURLString(String url, String queryParameter) throws ApproovException {
         if (!isApproovEnabled()) return url;
-        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        Approov.TokenFetchResult urlStatus;
+        try {
+            urlStatus = Approov.fetchApproovTokenAndWait(url);
+        } catch (IllegalStateException e) {
+            throw new ApproovException(e);
+        } catch (IllegalArgumentException e) {
+            throw new ApproovException(e);
+        }
         if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
             urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
             urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
