@@ -300,7 +300,7 @@ Call `substituteHeader(...)` from `Request.getHeaders()`.
 public Map<String, String> getHeaders() throws AuthFailureError {
     Map<String, String> headers = new HashMap<>();
     headers.put("Api-Key", "your-secure-string-key");
-    ApproovService.substituteHeader(headers, "Api-Key", null);
+    ApproovService.substituteHeader(this.getUrl(), headers, "Api-Key", null);
     return headers;
 }
 ```
@@ -314,7 +314,7 @@ Call `substituteQueryParam(...)` from `Request.getParams()`.
 protected Map<String, String> getParams() throws AuthFailureError {
     Map<String, String> params = new HashMap<>();
     params.put("api_key", "your-secure-string-key");
-    ApproovService.substituteQueryParam(params, "api_key");
+    ApproovService.substituteQueryParam(this.getUrl(), params, "api_key");
     return params;
 }
 ```

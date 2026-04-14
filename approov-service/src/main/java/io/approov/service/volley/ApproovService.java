@@ -773,13 +773,22 @@ public class ApproovService {
      * the output should not be cached. Note that this method does not exclude substitutions made in
      * any added excluded URLs.
      *
+     * @param url is the URL for the request
      * @param headers are the defined headers to be updated
      * @param substitutionHeader is the name of any header whose value may be substituted
      * @param requiredPrefix is any required prefix to the value being substituted or null if not required
      * @throws ApproovException if here was a problem
      */
-    public static void substituteHeader(Map<String, String> headers, String substitutionHeader,
+    public static void substituteHeader(String url, Map<String, String> headers, String substitutionHeader,
                                         String requiredPrefix) throws ApproovException {
+        if (!isApproovEnabled()) return;
+        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
+            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
+            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
+            return;
+        }
+
         String prefix = requiredPrefix;
         if (prefix == null)
             prefix = "";
@@ -815,11 +824,20 @@ public class ApproovService {
      * params values, as the output should not be cached. Note that this method does not exclude
      * substitutions made in any added excluded URLs.
      *
+     * @param url is the URL for the request
      * @param params are the defined params to be updated
      * @param queryParam is the name of any parameter whose value may be substituted
      * @throws ApproovException if here was a problem
      */
-    public static void substituteQueryParam(Map<String, String> params, String queryParam) throws ApproovException {
+    public static void substituteQueryParam(String url, Map<String, String> params, String queryParam) throws ApproovException {
+        if (!isApproovEnabled()) return;
+        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
+            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
+            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
+            return;
+        }
+
         String value = params.get(queryParam);
         if (value != null) {
             // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
@@ -858,6 +876,14 @@ public class ApproovService {
      * @throws ApproovException if it is not possible to obtain secure strings for substitution
      */
     public static String substituteQueryParamInURLString(String url, String queryParameter) throws ApproovException {
+        if (!isApproovEnabled()) return url;
+        Approov.TokenFetchResult urlStatus = Approov.fetchApproovTokenAndWait(url);
+        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
+            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
+            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
+            return url;
+        }
+
         Pattern pattern = Pattern.compile("[\\?&]"+queryParameter+"=([^&;]+)");
         String urlString = url.toString();
         Matcher matcher = pattern.matcher(urlString);

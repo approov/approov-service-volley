@@ -229,10 +229,13 @@ public class ApproovServiceContractTest {
                     "",
                     false);
 
+            Approov.TokenFetchResult urlResult = ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.SUCCESS);
+            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com"))
+                    .thenReturn(urlResult);
             approov.when(() -> Approov.fetchSecureStringAndWait("header-secret", null))
                     .thenReturn(headerResult);
 
-            ApproovService.substituteHeader(headers, "Api-Key", "Bearer ");
+            ApproovService.substituteHeader("https://api.example.com", headers, "Api-Key", "Bearer ");
 
             assertEquals("Bearer live-header", headers.get("Api-Key"));
         }
@@ -251,10 +254,13 @@ public class ApproovServiceContractTest {
                     "",
                     false);
 
+            Approov.TokenFetchResult urlResult = ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.SUCCESS);
+            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com"))
+                    .thenReturn(urlResult);
             approov.when(() -> Approov.fetchSecureStringAndWait("query-secret", null))
                     .thenReturn(queryResult);
 
-            ApproovService.substituteQueryParam(params, "secret");
+            ApproovService.substituteQueryParam("https://api.example.com", params, "secret");
 
             assertEquals("live-query", params.get("secret"));
         }
@@ -270,6 +276,9 @@ public class ApproovServiceContractTest {
                     "live-query",
                     "",
                     false);
+            Approov.TokenFetchResult urlResult = ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.SUCCESS);
+            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply?secret=query-secret"))
+                    .thenReturn(urlResult);
             approov.when(() -> Approov.fetchSecureStringAndWait("query-secret", null))
                     .thenReturn(queryResult);
 

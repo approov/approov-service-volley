@@ -321,21 +321,21 @@ RequestQueue queue = Volley.newRequestQueue(context, ApproovService.getBaseHttpS
 Substitutes a header value in-place using secure strings.
 
 ```java
-void substituteHeader(Map<String, String> headers, String substitutionHeader, String requiredPrefix)
+void substituteHeader(String url, Map<String, String> headers, String substitutionHeader, String requiredPrefix)
     throws ApproovException
 ```
 
-Use this from `Request.getHeaders()`.
+Use this from `Request.getHeaders()`, supplying `this.getUrl()` to natively block unauthorized unprotected lookups.
 
 ## substituteQueryParam
 
 Substitutes a form/query parameter value in-place using secure strings.
 
 ```java
-void substituteQueryParam(Map<String, String> params, String queryParam) throws ApproovException
+void substituteQueryParam(String url, Map<String, String> params, String queryParam) throws ApproovException
 ```
 
-Use this from `Request.getParams()`.
+Use this from `Request.getParams()`, supplying `this.getUrl()` to natively block unauthorized unprotected lookups.
 
 ## substituteQueryParamInURLString
 
@@ -345,7 +345,7 @@ Substitutes a query parameter embedded in a URL string.
 String substituteQueryParamInURLString(String url, String queryParameter) throws ApproovException
 ```
 
-Use this when the parameter is part of the request URL rather than a params map.
+Use this when the parameter is part of the request URL rather than a params map. If the provided URL belongs to an unprotected domain, the original URL is preserved and no Approov fetch occurs natively.
 
 # ApproovServiceMutator
 

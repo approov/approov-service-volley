@@ -135,9 +135,9 @@ public class ApproovServiceMiniSdkTest {
                 hdrs.put("X-Multi-1", "pref-multiple-1");
                 hdrs.put("X-Multi-2", "multiple-2");
                 try {
-                    ApproovService.substituteHeader(hdrs, "Api-Key", null);
-                    ApproovService.substituteHeader(hdrs, "X-Multi-1", "pref-");
-                    ApproovService.substituteHeader(hdrs, "X-Multi-2", null);
+                    ApproovService.substituteHeader(finalUrl, hdrs, "Api-Key", null);
+                    ApproovService.substituteHeader(finalUrl, hdrs, "X-Multi-1", "pref-");
+                    ApproovService.substituteHeader(finalUrl, hdrs, "X-Multi-2", null);
                 } catch (io.approov.service.volley.ApproovException e) {
                     throw new RuntimeException(e);
                 }
@@ -201,6 +201,50 @@ public class ApproovServiceMiniSdkTest {
 
         String token = getHeader(reply, "Approov-Token");
         assertNull("Expected null Approov-Token for excluded URL, but got: " + token, token);
+    }
+
+    @Test
+    public void testUpdateRequestToUnprotectedUrlIsUnmodified() throws Exception {
+        // Purposely reinitialize cleanly using a target that specifically excludes our explicit unprotected endpoint
+        // This ensures the local SDK routing treats it organically as an UNPROTECTED_URL.
+        reinitializeServiceWithTargetHost(""); 
+
+        String baseUrl = getUnprotectedURL() + "?api_key=query-key";
+        String finalUrl = ApproovService.substituteQueryParamInURLString(baseUrl, "api_key");
+
+        StringRequest request = new StringRequest(Request.Method.GET, finalUrl, null, null) {
+            @Override
+            public Map<String, String> getHeaders() {
+                Map<String, String> hdrs = new HashMap<>();
+                hdrs.put("Api-Key", "header-key");
+                try {
+                    ApproovService.substituteHeader(finalUrl, hdrs, "Api-Key", null);
+                } catch (io.approov.service.volley.ApproovException e) {
+                    throw new RuntimeException(e);
+                }
+                return hdrs;
+            }
+
+            @Override
+            protected Map<String, String> getParams() {
+                Map<String, String> params = new HashMap<>();
+                params.put("form_key", "form-secret");
+                try {
+                    ApproovService.substituteQueryParam(finalUrl, params, "form_key");
+                } catch (io.approov.service.volley.ApproovException e) {
+                    throw new RuntimeException(e);
+                }
+                return params;
+            }
+        };
+
+        JSONObject reply = executeRequest(request);
+
+        assertNull("UNPROTECTED request should not emit Approov Tokens natively!", getHeader(reply, "Approov-Token"));
+        assertEquals("Substitutions must bypass completely without modifying value", "header-key", getHeader(reply, "Api-Key"));
+
+        String urlFromReply = reply.getString("url");
+        assertTrue("Substitutions to URL query params must skip execution identically", urlFromReply.contains("api_key=query-key"));
     }
 
     @Test
@@ -273,7 +317,7 @@ public class ApproovServiceMiniSdkTest {
                 Map<String, String> hdrs = new HashMap<>();
                 hdrs.put("Api-Key", "header-key");
                 try {
-                    ApproovService.substituteHeader(hdrs, "Api-Key", null);
+                    ApproovService.substituteHeader(this.getUrl(), hdrs, "Api-Key", null);
                 } catch (io.approov.service.volley.ApproovException e) {
                     throw new RuntimeException(e);
                 }
