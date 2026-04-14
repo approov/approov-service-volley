@@ -110,7 +110,7 @@ public class ApproovService {
      */
     public static synchronized void initialize(Context context, String config, String comment) {
         boolean allowEnableAfterEmptyInitialization = isInitialized && (configString != null) && configString.isEmpty() && !config.isEmpty();
-        if (isInitialized && !comment.startsWith("reinit") && !allowEnableAfterEmptyInitialization) {
+        if (isInitialized && (comment == null || !comment.startsWith("reinit")) && !allowEnableAfterEmptyInitialization) {
             if (!config.equals(configString)) {
                 throw new IllegalStateException("ApproovService layer is already initialized");
             }
@@ -138,9 +138,13 @@ public class ApproovService {
         } catch (IllegalStateException e) {
             Log.e(TAG, "Approov already initialized: Ignoring native layer exception " + e.getMessage());
         }
-
-        Approov.setUserProperty("approov-service-volley");
-
+        if (config != null && config.length() != 0) {
+            try {
+                Approov.setUserProperty("approov-service-volley");
+            } catch (IllegalStateException e) {
+                // Ignore if native SDK is not initialized
+            }
+        }
         // create an alternative hurlstack to use
         hurlStack = new ApproovHurlStack();
         isInitialized = true;
@@ -366,7 +370,7 @@ public class ApproovService {
             return null;
         }
         String token = approovResults.getToken();
-        if (token == null) {
+        if (token == null || token.isEmpty()) {
             return null;
         }
         return formatApproovTokenHeaderValue(token);
@@ -382,7 +386,7 @@ public class ApproovService {
      */
     public static synchronized String getApproovTokenHeaderValueOrStatus(Approov.TokenFetchResult approovResults) {
         String headerValue = getApproovTokenHeaderValue(approovResults);
-        if (headerValue != null && !headerValue.equals(formatApproovTokenHeaderValue(""))) {
+        if (headerValue != null) {
             return headerValue;
         }
         if (approovResults == null || approovResults.getStatus() == null) {
