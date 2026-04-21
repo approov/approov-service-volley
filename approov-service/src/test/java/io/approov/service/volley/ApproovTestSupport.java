@@ -36,11 +36,9 @@ final class ApproovTestSupport {
         setStaticField("serviceMutator", ApproovServiceMutator.DEFAULT);
         setStaticField("exclusionURLRegexs", new HashMap<String, Pattern>());
         try {
-            java.util.concurrent.atomic.AtomicReference<Approov.TokenFetchResult> cachedGlobalFailure = getStaticField("cachedGlobalFailure", java.util.concurrent.atomic.AtomicReference.class);
-            if (cachedGlobalFailure != null) cachedGlobalFailure.set(null);
-            java.util.concurrent.atomic.AtomicBoolean isProbeRunning = getStaticField("isProbeRunning", java.util.concurrent.atomic.AtomicBoolean.class);
-            if (isProbeRunning != null) isProbeRunning.set(false);
-        } catch (Exception e) {
+            setStaticField("cachedFailureResult", null);
+            setStaticField("cachedFailureTimeMs", 0L);
+        } catch (Throwable e) {
             // ignore
         }
     }
