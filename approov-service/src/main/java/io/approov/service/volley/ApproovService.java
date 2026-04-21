@@ -95,6 +95,71 @@ public class ApproovService {
     // active mutator for customizing Approov request and result handling
     private static ApproovServiceMutator serviceMutator = ApproovServiceMutator.DEFAULT;
 
+    // Cached failure result from the last Approov token fetch that returned a failure status.
+    // Protected by failureCacheLock for thread-safe access. This avoids redundant ~1s SDK calls
+    // when the platform is in a sustained failure state (e.g. no network, MITM detected).
+    private static final Object failureCacheLock = new Object();
+    private static Approov.TokenFetchResult cachedFailureResult = null;
+    private static long cachedFailureTimeMs = 0;
+    private static final long FAILURE_CACHE_TTL_MS = 500; // 0.5 seconds
+
+    /**
+     * Returns a cached failure result if one exists and hasn't expired.
+     * Returns null if no cache exists or it has expired (caller should fetch from SDK).
+     */
+    private static Approov.TokenFetchResult getCachedFailure() {
+        synchronized (failureCacheLock) {
+            if (cachedFailureResult != null && (System.currentTimeMillis() - cachedFailureTimeMs) < FAILURE_CACHE_TTL_MS) {
+                return cachedFailureResult;
+            }
+            // Cache miss or expired — clear and allow a fresh SDK call
+            cachedFailureResult = null;
+            cachedFailureTimeMs = 0;
+            return null;
+        }
+    }
+
+    /**
+     * Caches a failure result. Only failure statuses are cached; success is never cached.
+     */
+    private static void cacheFailureIfNeeded(Approov.TokenFetchResult result) {
+        switch (result.getStatus()) {
+            case NO_NETWORK:
+            case POOR_NETWORK:
+            case MITM_DETECTED:
+            case NO_APPROOV_SERVICE:
+                synchronized (failureCacheLock) {
+                    cachedFailureResult = result;
+                    cachedFailureTimeMs = System.currentTimeMillis();
+                }
+                break;
+            default:
+                // Success and other statuses are never cached
+                break;
+        }
+    }
+
+    /**
+     * Performs a cached Approov token fetch. If a failure result is cached and within
+     * the TTL window, the cached failure is returned instantly. Otherwise a fresh SDK
+     * call is made and the result is cached if it is a failure.
+     *
+     * @param url is the URL giving the domain for the token fetch
+     * @return the token fetch result
+     */
+    static Approov.TokenFetchResult fetchApproovTokenCached(String url) {
+        Approov.TokenFetchResult cached = getCachedFailure();
+        if (cached != null) {
+            Log.d(TAG, "Using cached failure: " + cached.getStatus().toString());
+            return cached;
+        }
+
+        // Normal execution
+        Approov.TokenFetchResult result = Approov.fetchApproovTokenAndWait(url);
+        cacheFailureIfNeeded(result);
+        return result;
+    }
+
     /**
      * Construction is disallowed as this is a static only class.
      */
@@ -128,6 +193,10 @@ public class ApproovService {
         bindingHeader = null;
         useApproovStatusIfNoToken = false;
         exclusionURLRegexs = new HashMap<>();
+        synchronized (failureCacheLock) {
+            cachedFailureResult = null;
+            cachedFailureTimeMs = 0;
+        }
         serviceMutator = ApproovServiceMutator.DEFAULT;
         try {
             if (config.length() != 0)
@@ -538,7 +607,7 @@ public class ApproovService {
         // fetch the Approov token
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchApproovTokenAndWait(url);
+            approovResults = fetchApproovTokenCached(url);
             Log.d(TAG, "fetchToken: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
@@ -708,7 +777,7 @@ public class ApproovService {
         }
         if (hostname != null) {
             try {
-                Approov.TokenFetchResult result = Approov.fetchApproovTokenAndWait(hostname);
+                Approov.TokenFetchResult result = fetchApproovTokenCached(hostname);
                 if (result.getToken() != null && !result.getToken().isEmpty()) {
                     String arc = result.getARC();
                     if (arc != null) {
@@ -788,7 +857,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchApproovTokenCached(url);
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -844,7 +913,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchApproovTokenCached(url);
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -897,7 +966,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return url;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchApproovTokenCached(url);
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -1067,7 +1136,7 @@ class ApproovHurlStack extends HurlStack {
         // request an Approov token for the domain
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchApproovTokenAndWait(url);
+            approovResults = ApproovService.fetchApproovTokenCached(url);
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);

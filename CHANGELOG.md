@@ -14,6 +14,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - REFERENCE.md, USAGE.md, and CHANGELOG.md documentation.
 - Unit and contract tests covering the service API, HurlStack request flow, message signing, and shared signature utilities.
 - Added `ApproovService.isInitialized()` to expose the service-layer initialization state.
+- Thread-safe failure mode caching for the request path when the platform SDK returns a failure status (`NO_NETWORK`, `POOR_NETWORK`, `MITM_DETECTED`, `NO_APPROOV_SERVICE`).
 
 ### Changed
 - Approov request processing now routes through `ApproovServiceMutator`, including request token-header value selection.
