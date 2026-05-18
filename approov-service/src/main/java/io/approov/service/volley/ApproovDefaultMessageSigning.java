@@ -24,9 +24,9 @@ import android.util.Log;
 import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
 
-import org.bouncycastle.asn1.ASN1InputStream;
-import org.bouncycastle.asn1.ASN1Integer;
-import org.bouncycastle.asn1.ASN1Sequence;
+import io.approov.internal.bouncycastle.asn1.ASN1InputStream;
+import io.approov.internal.bouncycastle.asn1.ASN1Integer;
+import io.approov.internal.bouncycastle.asn1.ASN1Sequence;
 
 import java.math.BigInteger;
 import java.net.URI;
