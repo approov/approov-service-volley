@@ -28,6 +28,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Removed legacy `substituteHeader` and `substituteQueryParam` methods that did not accept a `url` parameter in order to bypass secure string execution for unprotected URLs.
 
 ### Fixed
+- Enforced SDK initialization gating across all public API endpoints (`fetchCustomJWT`, `getDeviceID`, `setDataHashInToken`, `setInstallAttrsInToken`, etc.) to prevent unhandled `IllegalStateException` crashes from the platform SDK when the service layer is operating in bypass/uninitialized mode.
 - Prevented install message-signing failures from aborting requests when the device keypair is unavailable; the service now logs and continues without an install signature.
 - Ensured fallback Approov fetch statuses can be forwarded instead of a JWT when configured and a request is allowed to proceed.
 - Fixed Volley message signing to handle header names case-insensitively and to replace stale signature headers correctly.
