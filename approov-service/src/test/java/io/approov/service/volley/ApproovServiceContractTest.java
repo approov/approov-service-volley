@@ -68,7 +68,7 @@ public class ApproovServiceContractTest {
 
             assertNotNull(firstStack);
             assertEquals(firstStack, ApproovService.getBaseHttpStack());
-            approov.verify(() -> Approov.initialize(context, "config-a", "auto", ""));
+            approov.verify(() -> Approov.initialize(context, "config-a", "auto", null));
         }
     }
 
@@ -83,7 +83,7 @@ public class ApproovServiceContractTest {
                     () -> ApproovService.initialize(context, "config-b"));
 
             assertEquals("ApproovService layer is already initialized", error.getMessage());
-            approov.verify(() -> Approov.initialize(context, "config-a", "auto", ""));
+            approov.verify(() -> Approov.initialize(context, "config-a", "auto", null));
         }
     }
 

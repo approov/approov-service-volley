@@ -35,12 +35,6 @@ final class ApproovTestSupport {
         setStaticField("bindingHeader", null);
         setStaticField("serviceMutator", ApproovServiceMutator.DEFAULT);
         setStaticField("exclusionURLRegexs", new HashMap<String, Pattern>());
-        try {
-            setStaticField("cachedFailureResult", null);
-            setStaticField("cachedFailureTimeMs", 0L);
-        } catch (Throwable e) {
-            // ignore
-        }
     }
 
     static void initializeApproovService(MockedStatic<Approov> approov) {
