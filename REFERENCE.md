@@ -38,11 +38,19 @@ This empty-config mode is intended as a bootstrap or bypass state for advanced i
 
 Initialization comments starting with `options:` should be treated as initial-call options, not as a repeated runtime update path. Repeated same-config `options:...` calls may fail at the native SDK level.
 
-An overload is also available when you need to pass SDK initialization comments such as a `reinit...` marker while reusing an already initialized native SDK from another Approov service layer:
+An alternative initialization function allows to provide further options or trigger reinitialization in the `comment` parameter. Please refer to the [Approov SDK documentation](https://approov.io/docs/latest/approov-direct-sdk-integration/#sdk-initialization-options) for details.
 
+**Java:**
 ```java
 void initialize(Context context, String config, String comment)
 ```
+
+**Kotlin:**
+```kotlin
+fun initialize(context: Context, config: String, comment: String)
+```
+
+For example, options like `options:no-install-key` or reinitialization via `reinit` can be supplied via the `comment` parameter.
 
 If initialization fails, `getBaseHttpStack()` remains `null`, so `Volley.newRequestQueue(context, ApproovService.getBaseHttpStack())` continues to operate with the standard Volley stack and without Approov request processing.
 
