@@ -222,12 +222,17 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                 }
                 signature = decodeBase64(base64);
                 try (ASN1InputStream asn1InputStream = new ASN1InputStream(signature)) {
-                    ASN1Sequence sequence = (ASN1Sequence) asn1InputStream.readObject();
-                    byte[] rBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(0));
-                    byte[] sBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(1));
-                    signature = new byte[rBytes.length + sBytes.length];
-                    System.arraycopy(rBytes, 0, signature, 0, rBytes.length);
-                    System.arraycopy(sBytes, 0, signature, rBytes.length, sBytes.length);
+                    Object obj = asn1InputStream.readObject();
+                    if (obj instanceof ASN1Sequence) {
+                        ASN1Sequence sequence = (ASN1Sequence) obj;
+                        byte[] rBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(0));
+                        byte[] sBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(1));
+                        signature = new byte[rBytes.length + sBytes.length];
+                        System.arraycopy(rBytes, 0, signature, 0, rBytes.length);
+                        System.arraycopy(sBytes, 0, signature, rBytes.length, sBytes.length);
+                    } else {
+                        throw new IllegalStateException("Not an ASN1Sequence");
+                    }
                 } catch (Exception e) {
                     throw new IllegalStateException("Failed to decode ASN.1 DER ES256 signature", e);
                 }
