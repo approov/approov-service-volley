@@ -106,23 +106,13 @@ public class ApproovService {
      * Initializes the ApproovService with an account configuration and comment.
      *
      * @param context the Application context
-     * @param config the configuration string, or empty for no SDK initialization
-     * @param comment the comment string, or empty for no comment
+     * @param config  the configuration string, or empty for no SDK initialization
+     * @param comment the comment string, or null for no comment
      */
     public static synchronized void initialize(Context context, String config, String comment) {
-        if (config == null) {
-            config = "";
-        }
-        boolean allowEnableAfterEmptyInitialization = isInitialized && (configString != null) && configString.isEmpty() && !config.isEmpty();
-        if (isInitialized && (comment == null || !comment.startsWith("reinit")) && !allowEnableAfterEmptyInitialization) {
-            if (!config.equals(configString)) {
-                throw new IllegalStateException("ApproovService layer is already initialized");
-            }
-            Log.d(TAG, "Ignoring multiple ApproovService layer initializations with the same config");
-            return;
-        }
-
-        // initialize the Approov SDK
+        if (config == null)
+            throw new IllegalArgumentException("config must not be null; pass \"\" for bypass mode");
+        // Reset service layer state
         hurlStack = null;
         isInitialized = false;
         configString = null;
@@ -133,21 +123,25 @@ public class ApproovService {
         useApproovStatusIfNoToken = false;
         exclusionURLRegexs = new HashMap<>();
         serviceMutator = ApproovServiceMutator.DEFAULT;
-        try {
-            if (!config.isEmpty())
-                Approov.initialize(context.getApplicationContext(), config, "auto", comment);
-        } catch (IllegalArgumentException e) {
-            Log.e(TAG, "Approov initialization failed: " + e.getMessage());
-            throw e;
-        } catch (IllegalStateException e) {
-            Log.e(TAG, "Approov already initialized: Ignoring native layer exception " + e.getMessage());
-        }
+
+        // Initialize the platform SDK if not in bypass mode (empty config).
+        // The SDK returns true if initialization succeeded, false if already initialized
+        // with the same config even by another service layer instance. Any other
+        // failure (e.g. different config) throws.
         if (!config.isEmpty()) {
             try {
-                Approov.setUserProperty("approov-service-volley");
+                boolean sdkInitialized = Approov.initialize(context.getApplicationContext(), config, "auto", comment);
+                if (!sdkInitialized) {
+                    Log.d(TAG, "Approov SDK already initialized");
+                }
+            } catch (IllegalArgumentException e) {
+                Log.e(TAG, "Approov initialization failed: " + e.getMessage());
+                throw e;
             } catch (IllegalStateException e) {
-                // Ignore if native SDK is not initialized
+                Log.e(TAG, "Approov initialization failed: " + e.getMessage());
+                throw e;
             }
+            Approov.setUserProperty("approov-service-volley");
         }
         // create an alternative hurlstack to use
         hurlStack = new ApproovHurlStack();

@@ -21,6 +21,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Added `setUseApproovStatusIfNoToken` / `getUseApproovStatusIfNoToken` compatibility behavior and documented how it interacts with mutators.
 - Shaded and relocated the BouncyCastle dependency (`io.approov.internal.bouncycastle`) to prevent version collisions for consuming applications.
 - Removed the transitive `org.bouncycastle:bcprov-jdk15to18` dependency from `pom.xml`.
+- Simplified `initialize` — removed the service-layer re-initialization guards (same-config short-circuit, `reinit` comment check). The service layer now always resets its own state and forwards non-empty config directly to the platform SDK. The SDK returns `false` if already initialized with the same config (service layer logs and continues), or throws `IllegalStateException` for a different config (service layer re-throws).
 - Update version to 3.5.4.
 
 ### Removed
@@ -31,10 +32,11 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Prevented install message-signing failures from aborting requests when the device keypair is unavailable; the service now logs and continues without an install signature.
 - Ensured fallback Approov fetch statuses can be forwarded instead of a JWT when configured and a request is allowed to proceed.
 - Fixed Volley message signing to handle header names case-insensitively and to replace stale signature headers correctly.
-- Improved service re-initialization consistency for internal state management.
 - Initializing with an empty config string now keeps the service layer initialized while returning a `null` `BaseHttpStack` (falling back to standard Volley stack) without Approov processing.
 - Initializing first with an empty config string and later with a valid non-empty config string now enables Approov at runtime instead of being rejected as a different-config reinitialization.
-- Enforced strict failure by throwing `IllegalArgumentException` in `ApproovService.initialize` if a malformed configuration string is provided.
+- `initialize` now explicitly throws `IllegalArgumentException` when `config` is `null`, with a clear message directing callers to pass `""` for bypass mode. Passing `null` previously caused a silent coercion to `""` which masked caller errors.
+- The 2-arg `initialize(context, config)` overload now correctly passes `null` (not `""`) as the comment to the native SDK, preventing unexpected re-initialization mismatches on subsequent calls.
+- `IllegalStateException` from the native SDK during initialization is now re-thrown instead of being silently swallowed, so callers are aware of configuration conflicts.
 
 ### Deprecated
 - `setProceedOnNetworkFail()` and `getProceedOnNetworkFail()` in favor of `setServiceMutator()`. The `proceedOnNetworkFail` state has been fully decoupled from the default `ApproovServiceMutator` logic. The default mutator now unconditionally throws an `ApproovNetworkException` on `NO_NETWORK`, `POOR_NETWORK`, and `MITM_DETECTED` to provide a secure default fallback behavior, unless cleanly overridden by a custom mutator.

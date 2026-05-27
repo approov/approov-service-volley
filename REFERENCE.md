@@ -26,6 +26,8 @@ The service methods may throw `ApproovException` or one of its subclasses:
 
 Initializes the Approov SDK and enables the Volley integration.
 
+This is the standard form and should be used in most cases. The `comment` parameter defaults to `null` when not supplied.
+
 ```java
 void initialize(Context context, String config)
 ```
@@ -34,11 +36,9 @@ Use the application context.
 
 It is possible to pass an empty `config` string to bypass Approov SDK initialization. In that case the service layer still reports itself as initialized, but any `BaseHttpStack` obtained from it will be `null`, preserving standard Volley request processing without Approov features.
 
-This empty-config mode is intended as a bootstrap or bypass state for advanced integrations. A later call to `initialize()` with a valid non-empty config string is allowed and will then enable the native Approov SDK at runtime. By contrast, reinitializing from one non-empty config string to a different non-empty config string is still rejected unless you are intentionally using a supported same-config `reinit...` flow.
+This empty-config mode is intended as a bootstrap or bypass state for advanced integrations. A later call to `initialize()` with a valid non-empty config string is allowed and will then enable the native Approov SDK at runtime. Reinitializing from one non-empty config string to a different non-empty config string is rejected by the platform SDK.
 
-Initialization comments starting with `options:` should be treated as initial-call options, not as a repeated runtime update path. Repeated same-config `options:...` calls may fail at the native SDK level.
-
-An alternative initialization function allows to provide further options or trigger reinitialization in the `comment` parameter. Please refer to the [Approov SDK documentation](https://approov.io/docs/latest/approov-direct-sdk-integration/#sdk-initialization-options) for details.
+If you need to supply a `comment` to the native SDK (for example to pass `options:...` startup flags or trigger a `reinit...` flow), use the extended form instead:
 
 **Java:**
 ```java
@@ -47,10 +47,15 @@ void initialize(Context context, String config, String comment)
 
 **Kotlin:**
 ```kotlin
-fun initialize(context: Context, config: String, comment: String)
+fun initialize(context: Context, config: String, comment: String?)
 ```
 
-For example, options like `options:no-install-key` or reinitialization via `reinit` can be supplied via the `comment` parameter.
+The `comment` parameter is passed directly to the native Approov SDK. Key uses:
+* Pass a string starting with `options:` during the initial setup to forward custom startup options to the native SDK.
+* Pass a string starting with `reinit` to trigger native re-initialization on a subsequent same-config call.
+* Pass `null` (or use the 2-arg form) when no comment is needed — this is the default.
+
+Please refer to the [Approov SDK documentation](https://approov.io/docs/latest/approov-direct-sdk-integration/#sdk-initialization-options) for full details on supported comment values.
 
 If initialization fails, `getBaseHttpStack()` remains `null`, so `Volley.newRequestQueue(context, ApproovService.getBaseHttpStack())` continues to operate with the standard Volley stack and without Approov request processing.
 
@@ -62,7 +67,7 @@ Returns whether the service layer itself has been initialized.
 boolean isInitialized()
 ```
 
-This reports the state of the service layer, not whether Approov protection is currently active. If initialization used an empty `config` string then this returns `true`, while the layer still operates as a plain integration without Approov features.
+Returns `true` if `initialize` has been called successfully, including when bypass mode is active (empty config string). Returns `false` if `initialize` has never been called or if the last initialization attempt failed. Use `isApproovEnabled()` to distinguish between bypass and protected modes.
 
 ## isApproovEnabled
 
@@ -72,7 +77,7 @@ Returns whether Approov protection is currently enabled.
 boolean isApproovEnabled()
 ```
 
-This returns `true` only if the service layer has been initialized with a valid, non-empty configuration string. If initialized with an empty string, or not initialized at all, it returns `false`.
+Returns `true` only when the service layer was initialized with a valid, non-empty configuration string and the native Approov SDK is active. Returns `false` in all other cases: not initialized, or initialized in bypass mode (empty config). All direct Approov SDK methods (such as `fetchToken`, `precheck`, `fetchSecureString`) will throw `ApproovException` if called when this returns `false`.
 
 ## setServiceMutator
 
