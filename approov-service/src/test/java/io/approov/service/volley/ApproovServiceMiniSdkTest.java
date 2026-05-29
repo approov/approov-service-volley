@@ -62,8 +62,11 @@ public class ApproovServiceMiniSdkTest {
             ApproovService.initialize(context, differentConfig);
             fail("Expected IllegalStateException");
         } catch (IllegalStateException e) {
-            assertEquals("ApproovService layer is already initialized", e.getMessage());
+            assertNotNull(e.getMessage());
         }
+        // Per TESTING_REQUIREMENTS §17-18: failure preserves the prior operating state.
+        assertTrue(ApproovService.isInitialized());
+        assertTrue(ApproovService.isApproovEnabled());
     }
 
     @Test

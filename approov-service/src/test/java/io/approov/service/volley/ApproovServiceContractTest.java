@@ -63,12 +63,13 @@ public class ApproovServiceContractTest {
             Context context = ApproovTestSupport.mockContext();
 
             ApproovService.initialize(context, "config-a");
-            BaseHttpStack firstStack = ApproovService.getBaseHttpStack();
             ApproovService.initialize(context, "config-a");
 
-            assertNotNull(firstStack);
-            assertEquals(firstStack, ApproovService.getBaseHttpStack());
-            approov.verify(() -> Approov.initialize(context, "config-a", "auto", null));
+            // Both calls succeed and the stack is always available (new instance per call).
+            assertNotNull(ApproovService.getBaseHttpStack());
+            // SDK is called on each service-layer initialize (state is committed after SDK success).
+            approov.verify(() -> Approov.initialize(context, "config-a", "auto", null),
+                           org.mockito.Mockito.times(2));
         }
     }
 
@@ -76,23 +77,29 @@ public class ApproovServiceContractTest {
     public void initializeThrowsForDifferentConfigAfterSuccess() {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             Context context = ApproovTestSupport.mockContext();
+            // SDK throws when a different config is provided to an already-initialized SDK.
+            approov.when(() -> Approov.initialize(context, "config-b", "auto", null))
+                    .thenThrow(new IllegalStateException("config conflict"));
 
             ApproovService.initialize(context, "config-a");
             IllegalStateException error = assertThrows(
                     IllegalStateException.class,
                     () -> ApproovService.initialize(context, "config-b"));
 
-            assertEquals("ApproovService layer is already initialized", error.getMessage());
-            approov.verify(() -> Approov.initialize(context, "config-a", "auto", null));
+            // Service layer re-throws the SDK exception; state is preserved (config-a still active).
+            assertNotNull(error.getMessage());
+            assertTrue(ApproovService.isInitialized());
+            assertTrue(ApproovService.isApproovEnabled());
         }
     }
 
     @Test
-    public void initializeAllowsReinitCommentWhenNativeSdkIsAlreadyInitialized() {
+    public void initializeHandlesCrossLayerSameConfigAsAlreadyInitialized() {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             Context context = ApproovTestSupport.mockContext();
+            // SDK returns false when another service layer has already initialized with the same config.
             approov.when(() -> Approov.initialize(context, "config-a", "auto", "reinit-tests"))
-                    .thenThrow(new IllegalStateException("already initialized"));
+                    .thenReturn(false);
 
             ApproovService.initialize(context, "config-a", "reinit-tests");
 
@@ -104,7 +111,7 @@ public class ApproovServiceContractTest {
     }
 
     @Test
-    public void initializeFailureClearsApproovStackAndLeavesPlainVolleyFallback() {
+    public void initializeFailurePreservesExistingState() {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             Context context = ApproovTestSupport.mockContext();
             ApproovService.initialize(context, "config-a");
@@ -118,9 +125,10 @@ public class ApproovServiceContractTest {
                     () -> ApproovService.initialize(context, "config-a", "reinit-bad"));
 
             assertEquals("bad config", error.getMessage());
-            assertNull(ApproovService.getBaseHttpStack());
-            assertFalse(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
-            assertNull(ApproovTestSupport.getStaticField("configString", String.class));
+            // Per TESTING_REQUIREMENTS §17-18: failure preserves the prior operating state.
+            assertNotNull(ApproovService.getBaseHttpStack());
+            assertTrue(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
+            assertEquals("config-a", ApproovTestSupport.getStaticField("configString", String.class));
         }
     }
 
