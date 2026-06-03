@@ -100,6 +100,27 @@ public class ApproovServiceMiniSdkTest {
         assertNotNull(getHeader(reply2, "Approov-Token"));
     }
 
+    @Test
+    public void testInitializeWithValidThenEmptyConfigIgnoresEmptyConfig() throws Exception {
+        reinitializeService(scenarioJson(uniqueCaseName("valid-then-empty"),
+            "\"protectedDomains\": [\"" + getTargetHost() + "\"]"));
+        
+        // Initialize with a valid config
+        ApproovService.initialize(context, validInitialConfig);
+        assertTrue(ApproovService.isInitialized());
+        assertTrue(ApproovService.isApproovEnabled());
+
+        // Reinitialize with an empty config (should be ignored)
+        ApproovService.initialize(context, "", "reinit-empty-config");
+        assertTrue(ApproovService.isInitialized());
+        assertTrue(ApproovService.isApproovEnabled());
+
+        // Verify that requests are still protected
+        StringRequest request = new StringRequest(Request.Method.GET, getTargetURL(), null, null);
+        JSONObject reply = executeRequest(request);
+        assertNotNull(getHeader(reply, "Approov-Token"));
+    }
+
     // ==================================================================================
     // SECTION 2: Request Processing & Token Behaviors
     // TESTING_REQUIREMENTS.md §2
