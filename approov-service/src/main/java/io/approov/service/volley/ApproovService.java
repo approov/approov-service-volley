@@ -20,6 +20,8 @@ package io.approov.service.volley;
 import android.util.Log;
 import android.content.Context;
 
+import androidx.annotation.VisibleForTesting;
+
 import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
 import com.android.volley.toolbox.BaseHttpStack;
@@ -227,6 +229,23 @@ public class ApproovService {
      */
     public static synchronized boolean isApproovEnabled() {
         return isInitialized && (configString != null) && !configString.isEmpty();
+    }
+
+    /**
+     * Resets the ApproovService state. This should only be used for testing.
+     */
+    @VisibleForTesting
+    static synchronized void reset() {
+        hurlStack = null;
+        isInitialized = false;
+        configString = null;
+        useApproovStatusIfNoToken = false;
+        approovTokenHeader = null;
+        approovTokenPrefix = null;
+        approovTraceIDHeader = null;
+        bindingHeader = null;
+        exclusionURLRegexs = null;
+        serviceMutator = ApproovServiceMutator.DEFAULT;
     }
 
    /**

@@ -73,7 +73,11 @@ public class ApproovServiceMiniSdkTest {
     public void testInitializeWithEmptyConfigBuildsPlainClient() throws Exception {
         reinitializeService(scenarioJson(uniqueCaseName("empty-config"),
             "\"protectedDomains\": [\"" + getTargetHost() + "\"]"));
+        ApproovService.reset();
         ApproovService.initialize(context, "", "reinit-empty-config");
+
+        assertTrue(ApproovService.isInitialized());
+        assertFalse(ApproovService.isApproovEnabled());
 
         StringRequest request = new StringRequest(Request.Method.GET, getTargetURL(), null, null);
         JSONObject reply = executeRequest(request);
@@ -86,7 +90,11 @@ public class ApproovServiceMiniSdkTest {
     public void testInitializeWithEmptyConfigCanLaterEnableApproov() throws Exception {
         reinitializeService(scenarioJson(uniqueCaseName("empty-then-valid"),
             "\"protectedDomains\": [\"" + getTargetHost() + "\"]"));
+        ApproovService.reset();
         ApproovService.initialize(context, "", "reinit-empty-config");
+
+        assertTrue(ApproovService.isInitialized());
+        assertFalse(ApproovService.isApproovEnabled());
 
         StringRequest request1 = new StringRequest(Request.Method.GET, getTargetURL(), null, null);
         JSONObject reply1 = executeRequest(request1);
