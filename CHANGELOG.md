@@ -4,6 +4,14 @@ All notable changes to this package will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [3.6.0] - 2026-06-05
+
+### Added
+- Added `SECURITY.md` with supported version and vulnerability reporting guidance.
+
+### Fixed
+- Empty-config reinitialization now preserves the active protected state when the service layer has already been initialized with a valid config.
+- Aligned Volley empty-config unit tests with the updated initialized-but-disabled behavior used by OkHttp.
 
 ## [3.5.4] - 2026-04-13
 
