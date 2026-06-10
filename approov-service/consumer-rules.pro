@@ -8,7 +8,3 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
-
--keepclasseswithmembernames class * {
-    public <init>(java.lang.String, int);
-}
