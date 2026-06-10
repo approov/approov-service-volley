@@ -203,6 +203,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
         VolleyComponentProvider provider = new VolleyComponentProvider(request, headers);
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
+        boolean hadContentDigest = provider.hasField("Content-Digest");
         SignatureParameters params = buildSignatureParameters(provider, changes);
         if (params == null) {
             return originalHeaders;
@@ -266,6 +267,13 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         signedHeaders.put("Signature", sigHeader);
         signedHeaders.put("Signature-Input", sigInputHeader);
 
+        List<String> addedHeaderKeys = new ArrayList<>();
+        if (!hadContentDigest && provider.hasField("Content-Digest")) {
+            addedHeaderKeys.add("Content-Digest");
+        }
+        addedHeaderKeys.add("Signature");
+        addedHeaderKeys.add("Signature-Input");
+
         if (params.isDebugMode()) {
             try {
                 MessageDigest digestBuilder = MessageDigest.getInstance("SHA-256");
@@ -274,11 +282,13 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                 String digestHeader = Dictionary.valueOf(Collections.singletonMap(
                         DIGEST_SHA256, ByteSequenceItem.valueOf(digest))).serialize();
                 signedHeaders.put("Signature-Base-Digest", digestHeader);
+                addedHeaderKeys.add("Signature-Base-Digest");
             } catch (NoSuchAlgorithmException e) {
                 Log.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
             }
         }
 
+        changes.setAddedHeaderKeys(addedHeaderKeys);
         return signedHeaders;
     }
 
