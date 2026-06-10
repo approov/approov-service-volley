@@ -510,6 +510,21 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
     /**
      * ComponentProvider implementation for Volley requests.
+     * <p>
+     * Note that some derived components deliberately deviate from a strict reading of
+     * RFC 9421 so that all Approov service layers produce identical signature bases for
+     * the Approov verifier:
+     * <ul>
+     * <li>{@code @authority} is the host only and never includes a port (RFC 9421
+     * section 2.2.3 includes non-default ports);</li>
+     * <li>{@code @target-uri} is the full request URL as provided to Volley, including
+     * any fragment (RFC 9421 section 2.2.2 excludes fragments);</li>
+     * <li>{@code @query} has no leading {@code ?} and is unavailable when the URL has
+     * no query (RFC 9421 section 2.2.7 includes the {@code ?} and uses {@code ?} alone
+     * for an absent query).</li>
+     * </ul>
+     * Any change here must be coordinated with the other service layers and the
+     * verifier, otherwise signatures stop validating.
      */
     protected static final class VolleyComponentProvider implements ComponentProvider {
         private final Request<?> request;
