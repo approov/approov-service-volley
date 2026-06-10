@@ -58,7 +58,7 @@ public class ApproovServiceContractTest {
     }
 
     @Test
-    public void initializeIgnoresDuplicateCallsWithSameConfig() {
+    public void initializeForwardsRepeatedCallsWithSameConfigToSdk() {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             Context context = ApproovTestSupport.mockContext();
 
