@@ -397,7 +397,7 @@ public class ApproovServiceMiniSdkTest {
     // ==================================================================================
 
     @Test
-    public void testUpdateRequestFailsOnPinMismatch() throws Exception {
+    public void testCreateConnectionAttachesPinningHostnameVerifier() throws Exception {
         String targetHost = getTargetHost();
         reinitializeService(scenarioJson(uniqueCaseName("pin-mismatch"),
             "\"protectedDomains\": [\"" + targetHost + "\"]," +
@@ -408,24 +408,21 @@ public class ApproovServiceMiniSdkTest {
             "}"
         ));
 
-        // Robolectric bypasses HostnameVerifier for real requests. We manually create connection
-        // to verify that PinningHostnameVerifier is attached by ApproovHurlStack.
-        try {
-            java.net.URL url = new java.net.URL(getTargetURL());
-            com.android.volley.toolbox.BaseHttpStack stack = ApproovService.getBaseHttpStack();
-            // In Volley 1.2+, createConnection is protected, so we reflect.
-            java.lang.reflect.Method m = stack.getClass().getSuperclass().getDeclaredMethod("createConnection", java.net.URL.class);
-            m.setAccessible(true);
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) m.invoke(stack, url);
-            
-            assertTrue(conn instanceof javax.net.ssl.HttpsURLConnection);
-            javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
-            
-            assertNotNull(httpsConn.getHostnameVerifier());
-            assertEquals("PinningHostnameVerifier", httpsConn.getHostnameVerifier().getClass().getSimpleName());
-        } catch (Exception e) {
-            fail("Expected to successfully reflect createConnection and find PinningHostnameVerifier");
-        }
+        // Robolectric bypasses HostnameVerifier for real requests so this only checks that
+        // PinningHostnameVerifier is attached by ApproovHurlStack; the verifier's pin
+        // accept/reject behavior is covered by PinningHostnameVerifierContractTest.
+        java.net.URL url = new java.net.URL(getTargetURL());
+        com.android.volley.toolbox.BaseHttpStack stack = ApproovService.getBaseHttpStack();
+        // In Volley 1.2+, createConnection is protected, so we reflect.
+        java.lang.reflect.Method m = stack.getClass().getSuperclass().getDeclaredMethod("createConnection", java.net.URL.class);
+        m.setAccessible(true);
+        java.net.HttpURLConnection conn = (java.net.HttpURLConnection) m.invoke(stack, url);
+
+        assertTrue(conn instanceof javax.net.ssl.HttpsURLConnection);
+        javax.net.ssl.HttpsURLConnection httpsConn = (javax.net.ssl.HttpsURLConnection) conn;
+
+        assertNotNull(httpsConn.getHostnameVerifier());
+        assertEquals("PinningHostnameVerifier", httpsConn.getHostnameVerifier().getClass().getSimpleName());
     }
 
     // ==================================================================================
