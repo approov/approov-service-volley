@@ -1,7 +1,11 @@
 name: Build and Test
 
+# push covers direct work on main while pull_request covers all PR branches,
+# avoiding duplicate runs for branches that have an open PR
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 jobs:
