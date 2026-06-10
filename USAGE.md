@@ -2,6 +2,15 @@
 
 This document describes the features and functionality of the Approov Service for Volley. It focuses on how to integrate the `BaseHttpStack`, how to customize request handling with `ApproovServiceMutator`, and how to enable HTTP message signing. For a basic end-to-end integration example, please refer to the [Quickstart guide](https://github.com/approov/quickstart-android-java-volley).
 
+# Migrating from Earlier Releases
+
+If you are upgrading from a release that predates the `ApproovServiceMutator` support, please review the following behavioral changes:
+
+- `setProceedOnNetworkFail()` no longer has any effect. Requests now fail with an `ApproovNetworkException` on retryable network failures (`NO_NETWORK`, `POOR_NETWORK`, `MITM_DETECTED`) unless you enable `setUseApproovStatusIfNoToken(true)` or install a custom mutator. If your app previously relied on `setProceedOnNetworkFail(true)`, you must adopt one of these replacements to retain that behavior. See [Proceed on network failure](#proceed-on-network-failure-and-send-the-status-instead-of-the-jwt).
+- `substituteHeader(...)` and `substituteQueryParam(...)` now require the request URL as their first argument so substitutions can be skipped for URLs that are not protected by Approov. The previous overloads without the URL have been removed and integrations must be updated when upgrading.
+- `getBaseHttpStack()` now returns `null` when the service layer was initialized with an empty configuration string (bypass mode). Passing the `null` to `Volley.newRequestQueue(...)` selects the standard Volley stack, so existing integration code continues to work unchanged.
+- `initialize(...)` now throws an `IllegalArgumentException` when the configuration string is `null`; pass `""` to request bypass mode explicitly.
+
 # Basic Integration
 
 Initialize Approov once during app startup, then create your Volley `RequestQueue` with the Approov-provided `BaseHttpStack`.
@@ -100,7 +109,7 @@ public final class EnforceTokenMutator implements ApproovServiceMutator {
 
 ## Proceed on network failure and send the status instead of the JWT
 
-`setProceedOnNetworkFail()` is now a legacy compatibility switch. Prefer a mutator instead.
+`setProceedOnNetworkFail()` is deprecated and no longer has any effect; calling it does not change request handling. Use the compatibility helper below or a custom mutator instead.
 
 If you want the default mutator to treat retryable token fetch failures as "proceed with a status value instead of a JWT", you can enable the compatibility helper:
 
