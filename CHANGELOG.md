@@ -8,10 +8,14 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ### Added
 - Added `SECURITY.md` with supported version and vulnerability reporting guidance.
+- Added a migration section to `USAGE.md` covering the behavioral changes since the pre-mutator releases.
 
 ### Fixed
 - Empty-config reinitialization now preserves the active protected state when the service layer has already been initialized with a valid config.
 - Aligned Volley empty-config unit tests with the updated initialized-but-disabled behavior used by OkHttp.
+- Corrected the consumer ProGuard keep rule to reference the relocated BouncyCastle package and removed an overly broad rule that disabled enum obfuscation in consuming applications.
+- Fixed structured field value decimal serialization dropping leading zeros in the fractional part (for example 1.05 previously serialized as `1.5`).
+- Removed `Map` overrides requiring Android API 24 from the vendored structured field values `Parameters` class.
 
 ## [3.5.4] - 2026-04-13
 
