@@ -187,6 +187,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
     /**
      * Adds message signing headers to requests that already received an Approov token.
+     * <p>
+     * Failure handling is intentionally asymmetric between the two algorithms: an install
+     * (ES256) signature failure is logged and the request proceeds unsigned, because the
+     * install keypair may legitimately be unavailable on a device; an account (HS256)
+     * signature failure propagates and fails the request, because the account secret is
+     * expected to always be available once configured.
      */
     @Override
     public Map<String, String> handleRequestProcessedHeaders(Request<?> request, Map<String, String> headers,
