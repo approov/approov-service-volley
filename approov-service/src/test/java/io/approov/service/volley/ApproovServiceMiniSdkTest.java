@@ -492,14 +492,30 @@ public class ApproovServiceMiniSdkTest {
     // Test Helpers
     // ==================================================================================
 
+    private static String resolveReplyURL(String envName, String controllerMethod) {
+        String url = System.getenv(envName);
+        if (url != null && !url.isEmpty()) {
+            return url;
+        }
+        // the mini-sdk resolves the same environment with private defaults so the
+        // endpoints are not duplicated (or exposed) in this public repository; the
+        // lookup is reflective so this suite still compiles against mini-sdk revisions
+        // that predate the accessors
+        try {
+            java.lang.reflect.Method method = AttesterProxyController.class.getMethod(controllerMethod);
+            return (String) method.invoke(null);
+        } catch (ReflectiveOperationException e) {
+            throw new org.junit.AssumptionViolatedException(
+                    envName + " is not set and the mini-sdk does not expose testing reply URLs", e);
+        }
+    }
+
     private String getTargetURL() {
-        // resolved by the mini-sdk from TESTING_REPLY_URL so the endpoints are not
-        // duplicated (or exposed) in this public repository
-        return AttesterProxyController.getTestingReplyURL();
+        return resolveReplyURL("TESTING_REPLY_URL", "getTestingReplyURL");
     }
 
     private String getUnprotectedURL() {
-        return AttesterProxyController.getTestingReplyURLUnprotected();
+        return resolveReplyURL("TESTING_REPLY_URL_UNPROTECTED", "getTestingReplyURLUnprotected");
     }
 
     private String getTargetHost() {
