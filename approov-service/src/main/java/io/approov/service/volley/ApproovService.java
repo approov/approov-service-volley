@@ -974,8 +974,7 @@ public class ApproovService {
         }
 
         Pattern pattern = Pattern.compile("[\\?&]"+queryParameter+"=([^&;]+)");
-        String urlString = url.toString();
-        Matcher matcher = pattern.matcher(urlString);
+        Matcher matcher = pattern.matcher(url);
         if (matcher.find()) {
             // we have found an occurrence of the query parameter to be replaced so we look up the existing
             // value as a key for a secure string
@@ -993,7 +992,7 @@ public class ApproovService {
             Log.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
             if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParameter)) {
                 // perform a query substitution
-                return new StringBuilder(urlString).replace(matcher.start(1),
+                return new StringBuilder(url).replace(matcher.start(1),
                             matcher.end(1), approovResults.getSecureString()).toString();
             }
         }
