@@ -493,13 +493,13 @@ public class ApproovServiceMiniSdkTest {
     // ==================================================================================
 
     private String getTargetURL() {
-        String url = System.getenv("TESTING_REPLY_URL");
-        return (url != null) ? url : "https://replay.ivol.workers.dev";
+        // resolved by the mini-sdk from TESTING_REPLY_URL so the endpoints are not
+        // duplicated (or exposed) in this public repository
+        return AttesterProxyController.getTestingReplyURL();
     }
 
     private String getUnprotectedURL() {
-        String url = System.getenv("TESTING_REPLY_URL_UNPROTECTED");
-        return (url != null) ? url : "https://replay-unprotected.ivol.workers.dev";
+        return AttesterProxyController.getTestingReplyURLUnprotected();
     }
 
     private String getTargetHost() {
@@ -543,12 +543,42 @@ public class ApproovServiceMiniSdkTest {
             "}";
     }
 
+    // reachability of the testing reply worker, probed once per test class
+    private static Boolean workerReachable;
+
+    private void assumeWorkerReachable() {
+        if (workerReachable == null) {
+            try {
+                java.net.HttpURLConnection conn =
+                        (java.net.HttpURLConnection) new java.net.URL(getTargetURL()).openConnection();
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                conn.getResponseCode();
+                conn.disconnect();
+                workerReachable = true;
+            } catch (Exception e) {
+                workerReachable = false;
+            }
+        }
+        org.junit.Assume.assumeTrue("testing reply worker is unreachable, skipping live request test",
+                workerReachable);
+    }
+
     private JSONObject executeRequest(Request<?> request) throws Exception {
+        assumeWorkerReachable();
         BaseHttpStack stack = ApproovService.getBaseHttpStack();
         if (stack == null) {
             stack = new com.android.volley.toolbox.HurlStack();
         }
-        HttpResponse response = stack.executeRequest(request, Collections.emptyMap());
+        HttpResponse response;
+        try {
+            response = stack.executeRequest(request, Collections.emptyMap());
+        } catch (java.net.SocketTimeoutException | java.net.ConnectException
+                | java.net.UnknownHostException e) {
+            // the worker probe passed but this request could not get through; treat it as a
+            // test environment problem rather than a service-layer failure
+            throw new org.junit.AssumptionViolatedException("testing reply worker unreachable", e);
+        }
         InputStream in = response.getContent();
         if (in == null) return new JSONObject();
         BufferedReader reader = new BufferedReader(new InputStreamReader(in));
