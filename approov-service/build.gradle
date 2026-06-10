@@ -42,8 +42,14 @@ android {
 
 configurations {
     shadowed
+}
 
-    testImplementation {
+// When the core-service-layers-testing mini-sdk is available it replaces the released
+// Approov SDK on the test classpath so the SDK behaviour can be simulated. Without it
+// the tests compile and run against the released SDK classes (mini-sdk-backed tests
+// are skipped below).
+if (findProject(':approov-sdk') != null) {
+    configurations.testImplementation {
         exclude group: 'io.approov', module: 'approov-android-sdk'
     }
 }
@@ -78,4 +84,13 @@ dependencies {
 
 tasks.withType(JavaCompile) {
     dependsOn tasks.named('shadowJar')
+}
+
+// the mini-sdk test exercises the full request flow against the simulated attester and
+// cannot compile or run without the core-service-layers-testing projects
+if (findProject(':test-support') == null) {
+    android.sourceSets.test.java.exclude '**/ApproovServiceMiniSdkTest.java'
+    tasks.withType(Test).configureEach {
+        exclude '**/ApproovServiceMiniSdkTest*'
+    }
 }
