@@ -27,7 +27,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 ### Changed
 - Approov request processing now routes through `ApproovServiceMutator`, including request token-header value selection.
 - Added `setUseApproovStatusIfNoToken` / `getUseApproovStatusIfNoToken` compatibility behavior and documented how it interacts with mutators.
-- Shaded and relocated the BouncyCastle dependency (`io.approov.internal.bouncycastle`) to prevent version collisions for consuming applications.
+- Shaded and relocated the BouncyCastle dependency (`io.approov.internal.volley.bouncycastle`) to prevent version collisions for consuming applications.
 - Removed the transitive `org.bouncycastle:bcprov-jdk15to18` dependency from `pom.xml`.
 - Simplified `initialize` — removed the service-layer re-initialization guards (same-config short-circuit, `reinit` comment check). The service layer now always resets its own state and forwards non-empty config directly to the platform SDK. The SDK returns `false` if already initialized with the same config (service layer logs and continues), or throws `IllegalStateException` for a different config (service layer re-throws).
 - Update version to 3.5.4.
