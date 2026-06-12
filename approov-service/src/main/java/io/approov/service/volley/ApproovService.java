@@ -882,9 +882,15 @@ public class ApproovService {
                 throw new ApproovException(e);
             }
 
-            if (getServiceMutator().handleRequestHeaderSubstitutionResult(approovResults, substitutionHeader))
-                // overwrite the request header with the new value
-                headers.put(substitutionHeader, prefix + approovResults.getSecureString());
+            if (getServiceMutator().handleRequestHeaderSubstitutionResult(approovResults, substitutionHeader)) {
+                // Only overwrite the header when a non-empty secure string is available.
+                // A null or empty result means substitution yielded no value; the original
+                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
+                String secureString = approovResults.getSecureString();
+                if (secureString != null && !secureString.isEmpty()) {
+                    headers.put(substitutionHeader, prefix + secureString);
+                }
+            }
         }
     }
 
@@ -935,9 +941,15 @@ public class ApproovService {
                 throw new ApproovException(e);
             }
 
-            if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParam))
-                // overwrite the parameter with the new value
-                params.put(queryParam, approovResults.getSecureString());
+            if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParam)) {
+                // Only overwrite the parameter when a non-empty secure string is available.
+                // A null or empty result means substitution yielded no value; the original
+                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
+                String secureString = approovResults.getSecureString();
+                if (secureString != null && !secureString.isEmpty()) {
+                    params.put(queryParam, secureString);
+                }
+            }
         }
     }
 
@@ -991,9 +1003,14 @@ public class ApproovService {
             }
             Log.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
             if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParameter)) {
-                // perform a query substitution
-                return new StringBuilder(url).replace(matcher.start(1),
-                            matcher.end(1), approovResults.getSecureString()).toString();
+                // Only substitute when a non-empty secure string is available.
+                // A null or empty result means substitution yielded no value; the original
+                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
+                String secureString = approovResults.getSecureString();
+                if (secureString != null && !secureString.isEmpty()) {
+                    return new StringBuilder(url).replace(matcher.start(1),
+                            matcher.end(1), secureString).toString();
+                }
             }
         }
         return url;
