@@ -138,7 +138,7 @@ public class ApproovService {
                 Log.e(TAG, "Approov initialization failed: " + e.getMessage());
                 throw e; // service-layer state NOT modified — prior operating mode preserved
             }
-            Approov.setUserProperty("approov-service-volley");
+            Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION);
         }
         // SDK succeeded (or bypass) — now reset and commit new service-layer state.
         hurlStack = null;
