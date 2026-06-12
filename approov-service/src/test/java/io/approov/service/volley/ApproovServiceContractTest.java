@@ -53,7 +53,7 @@ public class ApproovServiceContractTest {
 
             assertNull(ApproovTestSupport.getStaticField("approovTraceIDHeader", String.class));
             assertTrue(ApproovService.getUseApproovStatusIfNoToken());
-            approov.verify(() -> Approov.setUserProperty("approov-service-volley"));
+            approov.verify(() -> Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION));
         }
     }
 
@@ -106,7 +106,7 @@ public class ApproovServiceContractTest {
             assertNotNull(ApproovService.getBaseHttpStack());
             assertTrue(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
             assertEquals("config-a", ApproovTestSupport.getStaticField("configString", String.class));
-            approov.verify(() -> Approov.setUserProperty("approov-service-volley"));
+            approov.verify(() -> Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION));
         }
     }
 
