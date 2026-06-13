@@ -4,7 +4,7 @@ All notable changes to this package will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
-## [3.6.0] - 2026-06-05
+## [3.5.5] - 2026-06-05
 
 ### Added
 - Added `SECURITY.md` with supported version and vulnerability reporting guidance.
