@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import com.android.volley.Request;
@@ -21,6 +22,7 @@ public class ApproovDefaultMessageSigningContractTest {
         private String installSignatureBase64 = "";
         private String accountSignatureBase64 = "";
         private ApproovException installError;
+        private ApproovException accountError;
         private String lastInstallMessage;
         private String lastAccountMessage;
 
@@ -34,8 +36,11 @@ public class ApproovDefaultMessageSigningContractTest {
         }
 
         @Override
-        protected String getAccountMessageSignature(String message) {
+        protected String getAccountMessageSignature(String message) throws ApproovException {
             lastAccountMessage = message;
+            if (accountError != null) {
+                throw accountError;
+            }
             return accountSignatureBase64;
         }
 
@@ -175,5 +180,73 @@ public class ApproovDefaultMessageSigningContractTest {
         assertTrue(signed.get("Signature-Input").contains("account=("));
         assertNull(signer.lastInstallMessage);
         assertTrue(signer.lastAccountMessage.contains("\"approov-token\""));
+    }
+
+    private static ApproovTestSupport.TestRequest unsignedRequestFixture() {
+        return ApproovTestSupport.request(
+                Request.Method.POST,
+                "https://api.example.com/reply",
+                new LinkedHashMap<String, String>() {{
+                    put("Approov-Token", "Bearer jwt-token");
+                    put("Approov-TraceID", "trace-123");
+                    put("Authorization", "Bearer auth-token");
+                    put("Content-Type", "application/json");
+                }},
+                "{\"hello\":\"world\"}".getBytes(StandardCharsets.UTF_8),
+                "application/json");
+    }
+
+    // M1: account signing must silently fall back (proceed unsigned) when the SDK cannot provide an
+    // account signature, mirroring the install behaviour and the other service layers.
+    @Test
+    public void accountSigningSkipsGracefullyWhenAccountSignatureUnavailable() throws Exception {
+        RecordingSigner signer = new RecordingSigner();
+        signer.setDefaultFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory()
+                .setUseAccountMessageSigning());
+        signer.accountError = new ApproovException("no account signature available");
+        ApproovTestSupport.TestRequest request = unsignedRequestFixture();
+
+        Map<String, String> signed = signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges());
+
+        assertNull(signed.get("Content-Digest"));
+        assertNull(signed.get("Signature"));
+        assertNull(signed.get("Signature-Input"));
+        assertNull(signed.get("Signature-Base-Digest"));
+    }
+
+    // M1: an empty account signature is also treated as "no signature available" and skipped.
+    @Test
+    public void accountSigningSkipsGracefullyWhenAccountSignatureEmpty() throws Exception {
+        RecordingSigner signer = new RecordingSigner();
+        signer.setDefaultFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory()
+                .setUseAccountMessageSigning());
+        signer.accountSignatureBase64 = "";
+        ApproovTestSupport.TestRequest request = unsignedRequestFixture();
+
+        Map<String, String> signed = signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges());
+
+        assertNull(signed.get("Content-Digest"));
+        assertNull(signed.get("Signature"));
+        assertNull(signed.get("Signature-Input"));
+        assertNull(signed.get("Signature-Base-Digest"));
+    }
+
+    // M2: a genuine signing failure (a required body digest that cannot be generated) must be
+    // surfaced as ApproovException (a Volley VolleyError/AuthFailureError), not as an unchecked
+    // exception escaping the network stack.
+    @Test
+    public void requiredBodyDigestFailureSurfacesAsApproovException() {
+        RecordingSigner signer = new RecordingSigner();
+        signer.setDefaultFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory()
+                .setBodyDigestConfig(ApproovDefaultMessageSigning.DIGEST_SHA256, true));
+        signer.installSignatureBase64 = derEncodedInstallSignature();
+        // A POST with no body cannot produce the required Content-Digest.
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Approov-Token", "Bearer jwt-token");
+        ApproovTestSupport.TestRequest request = ApproovTestSupport.request(
+                Request.Method.POST, "https://api.example.com/reply", headers, null, "application/json");
+
+        assertThrows(ApproovException.class,
+                () -> signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges()));
     }
 }

@@ -209,96 +209,129 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
         VolleyComponentProvider provider = new VolleyComponentProvider(request, headers);
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
-        boolean hadContentDigest = provider.hasField("Content-Digest");
-        SignatureParameters params = buildSignatureParameters(provider, changes);
-        if (params == null) {
-            removeSignatureHeaders(originalHeaders);
-            return originalHeaders;
-        }
+        // Legitimate signing failures (unsupported algorithm, ASN.1/DER decode error, required body
+        // digest unavailable, signature-base component missing, serialization failure) must be
+        // propagated as request failures (TESTING_REQUIREMENTS §5). Several of these originate as
+        // unchecked exceptions in shared signing code; surface them as ApproovException (a Volley
+        // VolleyError/AuthFailureError) so Volley delivers them through its normal error path rather
+        // than as an uncaught exception on the network thread (§8.3). The silent-fallback cases (no
+        // install/account signature available) return the original headers from within the try.
+        try {
+            boolean hadContentDigest = provider.hasField("Content-Digest");
+            SignatureParameters params = buildSignatureParameters(provider, changes);
+            if (params == null) {
+                removeSignatureHeaders(originalHeaders);
+                return originalHeaders;
+            }
 
-        String message = new SignatureBaseBuilder(params, provider).createSignatureBase();
+            String message = new SignatureBaseBuilder(params, provider).createSignatureBase();
 
-        String sigId;
-        byte[] signature;
-        switch (params.getAlg()) {
-            case ALG_ES256: {
-                sigId = "install";
-                String base64;
-                try {
-                    base64 = getInstallMessageSignature(message);
-                } catch (ApproovException e) {
-                    Log.d(TAG, "Failed to get InstallMessageSignature - skipping message signing " + e);
-                    removeSignatureHeaders(originalHeaders);
-                    return originalHeaders;
-                }
-                if (base64.isEmpty()) {
-                    Log.d(TAG, "InstallMessageSignature is empty - skipping message signing");
-                    removeSignatureHeaders(originalHeaders);
-                    return originalHeaders;
-                }
-                signature = decodeBase64(base64);
-                try (ASN1InputStream asn1InputStream = new ASN1InputStream(signature)) {
-                    Object obj = asn1InputStream.readObject();
-                    if (obj instanceof ASN1Sequence) {
-                        ASN1Sequence sequence = (ASN1Sequence) obj;
-                        byte[] rBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(0));
-                        byte[] sBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(1));
-                        signature = new byte[rBytes.length + sBytes.length];
-                        System.arraycopy(rBytes, 0, signature, 0, rBytes.length);
-                        System.arraycopy(sBytes, 0, signature, rBytes.length, sBytes.length);
-                    } else {
-                        throw new IllegalStateException("Not an ASN1Sequence");
+            String sigId;
+            byte[] signature;
+            switch (params.getAlg()) {
+                case ALG_ES256: {
+                    sigId = "install";
+                    String base64;
+                    try {
+                        base64 = getInstallMessageSignature(message);
+                    } catch (ApproovException e) {
+                        // The SDK cannot provide an install signature (e.g. the device keypair is
+                        // unavailable): documented silent fallback, proceed unsigned.
+                        Log.d(TAG, "Failed to get InstallMessageSignature - skipping message signing " + e);
+                        removeSignatureHeaders(originalHeaders);
+                        return originalHeaders;
                     }
-                } catch (Exception e) {
-                    throw new IllegalStateException("Failed to decode ASN.1 DER ES256 signature", e);
+                    if (base64.isEmpty()) {
+                        Log.d(TAG, "InstallMessageSignature is empty - skipping message signing");
+                        removeSignatureHeaders(originalHeaders);
+                        return originalHeaders;
+                    }
+                    signature = decodeBase64(base64);
+                    try (ASN1InputStream asn1InputStream = new ASN1InputStream(signature)) {
+                        Object obj = asn1InputStream.readObject();
+                        if (obj instanceof ASN1Sequence) {
+                            ASN1Sequence sequence = (ASN1Sequence) obj;
+                            byte[] rBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(0));
+                            byte[] sBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(1));
+                            signature = new byte[rBytes.length + sBytes.length];
+                            System.arraycopy(rBytes, 0, signature, 0, rBytes.length);
+                            System.arraycopy(sBytes, 0, signature, rBytes.length, sBytes.length);
+                        } else {
+                            throw new IllegalStateException("Not an ASN1Sequence");
+                        }
+                    } catch (Exception e) {
+                        // A non-null signature that cannot be decoded is a genuine error, not a
+                        // missing-signature fallback, so it is propagated (§5).
+                        throw new ApproovException("Failed to decode ASN.1 DER ES256 signature: " + e.getMessage(), e);
+                    }
+                    break;
                 }
-                break;
+                case ALG_HS256: {
+                    sigId = "account";
+                    String base64;
+                    try {
+                        base64 = getAccountMessageSignature(message);
+                    } catch (ApproovException e) {
+                        // The SDK cannot provide an account signature (e.g. no mksid yet). Mirror the
+                        // install behaviour: documented silent fallback, proceed unsigned (§5).
+                        Log.d(TAG, "Failed to get AccountMessageSignature - skipping message signing " + e);
+                        removeSignatureHeaders(originalHeaders);
+                        return originalHeaders;
+                    }
+                    if (base64.isEmpty()) {
+                        Log.d(TAG, "AccountMessageSignature is empty - skipping message signing");
+                        removeSignatureHeaders(originalHeaders);
+                        return originalHeaders;
+                    }
+                    signature = decodeBase64(base64);
+                    break;
+                }
+                default:
+                    throw new ApproovException("Unsupported algorithm identifier: " + params.getAlg());
             }
-            case ALG_HS256: {
-                sigId = "account";
-                String base64 = getAccountMessageSignature(message);
-                signature = decodeBase64(base64);
-                break;
+
+            String sigHeader = Dictionary.valueOf(Collections.singletonMap(
+                    sigId, ByteSequenceItem.valueOf(signature))).serialize();
+            String sigInputHeader = Dictionary.valueOf(Collections.singletonMap(
+                    sigId, params.toComponentValue())).serialize();
+
+            Map<String, String> signedHeaders = new LinkedHashMap<>(provider.getHeaders());
+            removeHeaderIgnoreCase(signedHeaders, "Signature");
+            removeHeaderIgnoreCase(signedHeaders, "Signature-Input");
+            removeHeaderIgnoreCase(signedHeaders, "Signature-Base-Digest");
+            signedHeaders.put("Signature", sigHeader);
+            signedHeaders.put("Signature-Input", sigInputHeader);
+
+            List<String> addedHeaderKeys = new ArrayList<>();
+            if (!hadContentDigest && provider.hasField("Content-Digest")) {
+                addedHeaderKeys.add("Content-Digest");
             }
-            default:
-                throw new IllegalStateException("Unsupported algorithm identifier: " + params.getAlg());
-        }
+            addedHeaderKeys.add("Signature");
+            addedHeaderKeys.add("Signature-Input");
 
-        String sigHeader = Dictionary.valueOf(Collections.singletonMap(
-                sigId, ByteSequenceItem.valueOf(signature))).serialize();
-        String sigInputHeader = Dictionary.valueOf(Collections.singletonMap(
-                sigId, params.toComponentValue())).serialize();
-
-        Map<String, String> signedHeaders = new LinkedHashMap<>(provider.getHeaders());
-        removeHeaderIgnoreCase(signedHeaders, "Signature");
-        removeHeaderIgnoreCase(signedHeaders, "Signature-Input");
-        removeHeaderIgnoreCase(signedHeaders, "Signature-Base-Digest");
-        signedHeaders.put("Signature", sigHeader);
-        signedHeaders.put("Signature-Input", sigInputHeader);
-
-        List<String> addedHeaderKeys = new ArrayList<>();
-        if (!hadContentDigest && provider.hasField("Content-Digest")) {
-            addedHeaderKeys.add("Content-Digest");
-        }
-        addedHeaderKeys.add("Signature");
-        addedHeaderKeys.add("Signature-Input");
-
-        if (params.isDebugMode()) {
-            try {
-                MessageDigest digestBuilder = MessageDigest.getInstance("SHA-256");
-                digestBuilder.reset();
-                byte[] digest = digestBuilder.digest(message.getBytes(StandardCharsets.UTF_8));
-                String digestHeader = Dictionary.valueOf(Collections.singletonMap(
-                        DIGEST_SHA256, ByteSequenceItem.valueOf(digest))).serialize();
-                signedHeaders.put("Signature-Base-Digest", digestHeader);
-                addedHeaderKeys.add("Signature-Base-Digest");
-            } catch (NoSuchAlgorithmException e) {
-                Log.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
+            if (params.isDebugMode()) {
+                try {
+                    MessageDigest digestBuilder = MessageDigest.getInstance("SHA-256");
+                    digestBuilder.reset();
+                    byte[] digest = digestBuilder.digest(message.getBytes(StandardCharsets.UTF_8));
+                    String digestHeader = Dictionary.valueOf(Collections.singletonMap(
+                            DIGEST_SHA256, ByteSequenceItem.valueOf(digest))).serialize();
+                    signedHeaders.put("Signature-Base-Digest", digestHeader);
+                    addedHeaderKeys.add("Signature-Base-Digest");
+                } catch (NoSuchAlgorithmException e) {
+                    Log.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
+                }
             }
-        }
 
-        changes.setAddedHeaderKeys(addedHeaderKeys);
-        return signedHeaders;
+            changes.setAddedHeaderKeys(addedHeaderKeys);
+            return signedHeaders;
+        } catch (RuntimeException e) {
+            // Unchecked failures from shared signing code (required body digest unavailable, missing
+            // signature-base component, serialization failure, etc.). ApproovException is checked
+            // (extends VolleyError) and is NOT caught here, so the silent-fallback and explicit
+            // ApproovException paths above propagate unchanged.
+            throw new ApproovException("Message signing failed: " + e.getMessage(), e);
+        }
     }
 
     /**
