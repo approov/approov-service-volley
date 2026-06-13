@@ -201,6 +201,11 @@ public interface ApproovServiceMutator {
                 }
                 throw new ApproovNetworkException(status,
                         "Approov token fetch for " + url + ": " + status.toString());
+            case REJECTED:
+                throw new ApproovRejectionException(
+                        "Approov token fetch for " + url + ": " + status.toString() + ": "
+                                + approovResults.getARC() + " " + approovResults.getRejectionReasons(),
+                        approovResults.getARC(), approovResults.getRejectionReasons());
             case NO_APPROOV_SERVICE:
             case UNKNOWN_URL:
             case UNPROTECTED_URL:

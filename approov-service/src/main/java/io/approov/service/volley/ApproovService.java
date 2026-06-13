@@ -122,6 +122,16 @@ public class ApproovService {
             return;
         }
 
+        // Check if we are already initialized to prevent runtime config mismatch
+        if (isInitialized) {
+            boolean isUpgrade = configString.isEmpty() && !config.isEmpty();
+            if (!isUpgrade) {
+                if (!config.equals(configString)) {
+                    throw new IllegalStateException("ApproovService already initialized with a different config");
+                }
+            }
+        }
+
         // Initialize the platform SDK if not in bypass mode (empty config).
         // State is only modified after the SDK confirms success, preserving the current
         // operating mode (protected or bypass) if the call fails.

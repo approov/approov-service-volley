@@ -167,6 +167,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         }
     }
 
+    private static void removeSignatureHeaders(Map<String, String> headers) {
+        removeHeaderIgnoreCase(headers, "Signature");
+        removeHeaderIgnoreCase(headers, "Signature-Input");
+        removeHeaderIgnoreCase(headers, "Signature-Base-Digest");
+    }
+
     private static byte[] to32ByteArray(ASN1Integer bytesAsASN1Integer) {
         BigInteger bytesAsBigInteger = bytesAsASN1Integer.getValue();
         byte[] bytes = bytesAsBigInteger.toByteArray();
@@ -206,6 +212,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         boolean hadContentDigest = provider.hasField("Content-Digest");
         SignatureParameters params = buildSignatureParameters(provider, changes);
         if (params == null) {
+            removeSignatureHeaders(originalHeaders);
             return originalHeaders;
         }
 
@@ -221,10 +228,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     base64 = getInstallMessageSignature(message);
                 } catch (ApproovException e) {
                     Log.d(TAG, "Failed to get InstallMessageSignature - skipping message signing " + e);
+                    removeSignatureHeaders(originalHeaders);
                     return originalHeaders;
                 }
                 if (base64.isEmpty()) {
                     Log.d(TAG, "InstallMessageSignature is empty - skipping message signing");
+                    removeSignatureHeaders(originalHeaders);
                     return originalHeaders;
                 }
                 signature = decodeBase64(base64);
@@ -333,7 +342,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      * Factory for generating request-specific signature parameters.
      */
     public static class SignatureParametersFactory {
-        protected SignatureParameters baseParameters;
+        protected SignatureParameters baseParameters = new SignatureParameters();
         protected String bodyDigestAlgorithm;
         protected boolean bodyDigestRequired;
         protected boolean useAccountMessageSigning;
@@ -341,7 +350,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         protected long expiresLifetime;
         protected boolean addApproovTokenHeader;
         protected boolean addApproovTraceIDHeader;
-        protected List<String> optionalHeaders;
+        protected List<String> optionalHeaders = new ArrayList<>();
 
         /**
          * Sets the base parameters copied for each message signature.

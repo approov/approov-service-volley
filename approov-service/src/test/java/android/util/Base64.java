@@ -43,10 +43,16 @@ public final class Base64 {
                 stripped.append(c);
             }
         }
+        // Strip existing trailing padding characters first
+        while (stripped.length() > 0 && stripped.charAt(stripped.length() - 1) == '=') {
+            stripped.deleteCharAt(stripped.length() - 1);
+        }
         String text = stripped.toString();
-        int padding = (4 - text.length() % 4) % 4;
-        if ((padding == 1 || padding == 2) && !text.endsWith("=")) {
-            text += padding == 1 ? "=" : "==";
+        int mod = text.length() % 4;
+        if (mod == 2) {
+            text += "==";
+        } else if (mod == 3) {
+            text += "=";
         }
         java.util.Base64.Decoder decoder = (flags & URL_SAFE) != 0
                 ? java.util.Base64.getUrlDecoder()
