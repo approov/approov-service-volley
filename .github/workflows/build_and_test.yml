@@ -17,10 +17,9 @@ jobs:
       WORKSPACE: "${{ github.workspace }}"
       GIT_BRANCH: "${{ github.ref }}"
       CURRENT_TAG: "${{ github.ref_name }}"
-      # Worker endpoints: consumed from GitHub organisation variables first.
-      # If the org variable is not set the value is an empty string; the probe
-      # step below falls back to the same hardcoded defaults that are baked into
-      # the mini-sdk (MiniAttesterConfig / Approov.m), keeping them in sync.
+      # Worker endpoints: consumed from GitHub organisation variables.
+      # The verification step below fails fast if these variables are not
+      # defined, as no hardcoded fallback is provided for security.
       # Worker management (create / redeploy) logic is centralized in the
       # core-service-layers-testing script, but invoked here when needed.
       TESTING_REPLY_URL: ${{ vars.TESTING_REPLY_URL }}
