@@ -27,6 +27,7 @@ jobs:
       # Required for the redeploy script invocation on failure
       CLOUDFLARE_API_TOKEN_WORKERS_DEV: ${{ secrets.CLOUDFLARE_API_TOKEN_WORKERS_DEV }}
       CLOUDFLARE_ACCOUNT_ID_WORKERS_DEV: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_WORKERS_DEV }}
+      CORE_SERVICE_LAYERS_TESTING_PAT: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT }}
 
     steps:
       # -----------------------------------------------------------------------
@@ -46,7 +47,7 @@ jobs:
       #    so both repos must sit under the same parent ($GITHUB_WORKSPACE).
       # -----------------------------------------------------------------------
       - name: Checkout core-service-layers-testing
-        if: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
+        if: ${{ env.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
         uses: actions/checkout@v6
         with:
           repository: approov/core-service-layers-testing
@@ -65,7 +66,7 @@ jobs:
       #    script in core-service-layers-testing to redeploy them.
       # -----------------------------------------------------------------------
       - name: Verify worker endpoints
-        if: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
+        if: ${{ env.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
         run: |
           # ── URL resolution ──────────────────────────────────────────────────
           # URLs MUST be set as GitHub organisation or repository variables.
