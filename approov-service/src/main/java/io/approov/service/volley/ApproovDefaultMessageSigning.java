@@ -209,21 +209,28 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
         VolleyComponentProvider provider = new VolleyComponentProvider(request, headers);
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
-        // Legitimate signing failures (unsupported algorithm, ASN.1/DER decode error, required body
-        // digest unavailable, signature-base component missing, serialization failure) must be
-        // propagated as request failures (TESTING_REQUIREMENTS §5). Several of these originate as
-        // unchecked exceptions in shared signing code; surface them as ApproovException (a Volley
-        // VolleyError/AuthFailureError) so Volley delivers them through its normal error path rather
-        // than as an uncaught exception on the network thread (§8.3). The silent-fallback cases (no
-        // install/account signature available) return the original headers from within the try.
-        try {
-            boolean hadContentDigest = provider.hasField("Content-Digest");
-            SignatureParameters params = buildSignatureParameters(provider, changes);
-            if (params == null) {
-                removeSignatureHeaders(originalHeaders);
-                return originalHeaders;
-            }
+        boolean hadContentDigest = provider.hasField("Content-Digest");
 
+        // Message signing is fail-open (TESTING_REQUIREMENTS §5). Only two conditions fail closed and
+        // abort the request: (1) a REQUIRED body digest that cannot be generated, and (2) an
+        // unsupported signing algorithm. buildSignatureParameters is where a required digest is
+        // enforced, so it runs first and its failure is surfaced as ApproovException (fail closed).
+        SignatureParameters params;
+        try {
+            params = buildSignatureParameters(provider, changes);
+        } catch (RuntimeException e) {
+            throw new ApproovException("Required body digest could not be generated: " + e.getMessage(), e);
+        }
+        if (params == null) {
+            removeSignatureHeaders(originalHeaders);
+            return originalHeaders;
+        }
+
+        // Everything below is fail-open: any failure to obtain, decode, or serialize a signature logs
+        // at error level and proceeds unsigned. The single exception is an unsupported algorithm, which
+        // is thrown as ApproovException (checked, so it is NOT caught by the fail-open RuntimeException
+        // handler and propagates to abort the request).
+        try {
             String message = new SignatureBaseBuilder(params, provider).createSignatureBase();
 
             String sigId;
@@ -235,14 +242,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     try {
                         base64 = getInstallMessageSignature(message);
                     } catch (ApproovException e) {
-                        // The SDK cannot provide an install signature (e.g. the device keypair is
-                        // unavailable): documented silent fallback, proceed unsigned.
-                        Log.d(TAG, "Failed to get InstallMessageSignature - skipping message signing " + e);
+                        Log.e(TAG, "Install message signature unavailable - proceeding unsigned: " + e);
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
                     if (base64.isEmpty()) {
-                        Log.d(TAG, "InstallMessageSignature is empty - skipping message signing");
+                        Log.e(TAG, "Install message signature empty - proceeding unsigned");
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
@@ -260,9 +265,10 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                             throw new IllegalStateException("Not an ASN1Sequence");
                         }
                     } catch (Exception e) {
-                        // A non-null signature that cannot be decoded is a genuine error, not a
-                        // missing-signature fallback, so it is propagated (§5).
-                        throw new ApproovException("Failed to decode ASN.1 DER ES256 signature: " + e.getMessage(), e);
+                        // Fail-open: a malformed install signature is logged and the request proceeds unsigned.
+                        Log.e(TAG, "Failed to decode ASN.1 DER ES256 signature - proceeding unsigned: " + e, e);
+                        removeSignatureHeaders(originalHeaders);
+                        return originalHeaders;
                     }
                     break;
                 }
@@ -272,14 +278,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     try {
                         base64 = getAccountMessageSignature(message);
                     } catch (ApproovException e) {
-                        // The SDK cannot provide an account signature (e.g. no mksid yet). Mirror the
-                        // install behaviour: documented silent fallback, proceed unsigned (§5).
-                        Log.d(TAG, "Failed to get AccountMessageSignature - skipping message signing " + e);
+                        Log.e(TAG, "Account message signature unavailable - proceeding unsigned: " + e);
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
                     if (base64.isEmpty()) {
-                        Log.d(TAG, "AccountMessageSignature is empty - skipping message signing");
+                        Log.e(TAG, "Account message signature empty - proceeding unsigned");
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
@@ -287,6 +291,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     break;
                 }
                 default:
+                    // Unsupported algorithm fails closed.
                     throw new ApproovException("Unsupported algorithm identifier: " + params.getAlg());
             }
 
@@ -326,11 +331,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             changes.setAddedHeaderKeys(addedHeaderKeys);
             return signedHeaders;
         } catch (RuntimeException e) {
-            // Unchecked failures from shared signing code (required body digest unavailable, missing
-            // signature-base component, serialization failure, etc.). ApproovException is checked
-            // (extends VolleyError) and is NOT caught here, so the silent-fallback and explicit
-            // ApproovException paths above propagate unchanged.
-            throw new ApproovException("Message signing failed: " + e.getMessage(), e);
+            // Fail-open: any other signing failure (signature-base component missing, base64 decode,
+            // serialization, etc.) is logged and the request proceeds unsigned. ApproovException is
+            // checked and is NOT caught here, so the unsupported-algorithm fail-closed path propagates.
+            Log.e(TAG, "Message signing failed - proceeding unsigned: " + e, e);
+            removeSignatureHeaders(originalHeaders);
+            return originalHeaders;
         }
     }
 

@@ -231,9 +231,8 @@ public class ApproovDefaultMessageSigningContractTest {
         assertNull(signed.get("Signature-Base-Digest"));
     }
 
-    // M2: a genuine signing failure (a required body digest that cannot be generated) must be
-    // surfaced as ApproovException (a Volley VolleyError/AuthFailureError), not as an unchecked
-    // exception escaping the network stack.
+    // Fail-closed case 1: a REQUIRED body digest that cannot be generated must surface as
+    // ApproovException (a Volley VolleyError/AuthFailureError) and abort the request.
     @Test
     public void requiredBodyDigestFailureSurfacesAsApproovException() {
         RecordingSigner signer = new RecordingSigner();
@@ -248,5 +247,36 @@ public class ApproovDefaultMessageSigningContractTest {
 
         assertThrows(ApproovException.class,
                 () -> signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges()));
+    }
+
+    // Fail-open: a malformed ASN.1/DER install signature (decodes from base64, but is not a DER
+    // SEQUENCE) must NOT abort the request — the layer proceeds unsigned.
+    @Test
+    public void installSigningFailsOpenOnMalformedAsn1Signature() throws Exception {
+        RecordingSigner signer = new RecordingSigner();
+        signer.setDefaultFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory());
+        signer.installSignatureBase64 = Base64.getEncoder().encodeToString(new byte[] { 0x01, 0x02, 0x03 });
+        ApproovTestSupport.TestRequest request = unsignedRequestFixture();
+
+        Map<String, String> signed = signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges());
+
+        assertNull(signed.get("Signature"));
+        assertNull(signed.get("Signature-Input"));
+        assertNull(signed.get("Signature-Base-Digest"));
+    }
+
+    // Fail-open: an install signature value that cannot be base64-decoded must NOT abort the request.
+    @Test
+    public void installSigningFailsOpenOnUndecodableBase64Signature() throws Exception {
+        RecordingSigner signer = new RecordingSigner();
+        signer.setDefaultFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory());
+        signer.installSignatureBase64 = "this is not valid base64 !!!";
+        ApproovTestSupport.TestRequest request = unsignedRequestFixture();
+
+        Map<String, String> signed = signer.handleRequestProcessedHeaders(request, request.getHeaders(), defaultChanges());
+
+        assertNull(signed.get("Signature"));
+        assertNull(signed.get("Signature-Input"));
+        assertNull(signed.get("Signature-Base-Digest"));
     }
 }
