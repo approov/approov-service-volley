@@ -16,18 +16,41 @@ If you are upgrading from a release that predates the `ApproovServiceMutator` su
 Initialize Approov once during app startup, then create your Volley `RequestQueue` with the Approov-provided `BaseHttpStack`.
 
 ```java
+import android.util.Log;
 import com.android.volley.RequestQueue;
 import com.android.volley.toolbox.Volley;
+import java.util.UUID;
 
 import io.approov.service.volley.ApproovService;
 
 public final class MyApp extends android.app.Application {
+    private static final String TAG = "MyApp";
+
     @Override
     public void onCreate() {
         super.onCreate();
 
-        ApproovService.initialize(this, "<your-config-string>");
+        // App-generated id to correlate this install/session across your app logs and backend
+        // (a UUID or any session/user identifier — it is NOT an Approov secret).
+        String correlationId = UUID.randomUUID().toString();
 
+        // Initialization can fail (bad config / SDK error). Guard it and fall back to bypass
+        // mode (empty config) rather than letting the app crash.
+        try {
+            ApproovService.initialize(this, "<your-config-string>");
+            if (ApproovService.isApproovEnabled()) {
+                Log.i(TAG, "Approov initialized; deviceID=" + ApproovService.getDeviceID()
+                        + " session=" + correlationId);
+            } else {
+                Log.w(TAG, "Approov initialized in bypass mode (no protection); session=" + correlationId);
+            }
+        } catch (Exception e) {
+            // Continue UNPROTECTED — requests go out without Approov protection; backend stays the enforcement point.
+            Log.e(TAG, "Approov init failed (session=" + correlationId + "); continuing unprotected", e);
+            ApproovService.initialize(this, "");
+        }
+
+        // getBaseHttpStack() returns null in bypass mode, which selects the standard Volley stack.
         RequestQueue queue = Volley.newRequestQueue(
             this,
             ApproovService.getBaseHttpStack()
