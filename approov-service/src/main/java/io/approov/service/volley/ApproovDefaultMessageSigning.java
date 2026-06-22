@@ -194,11 +194,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     /**
      * Adds message signing headers to requests that already received an Approov token.
      * <p>
-     * Failure handling is intentionally asymmetric between the two algorithms: an install
-     * (ES256) signature failure is logged and the request proceeds unsigned, because the
-     * install keypair may legitimately be unavailable on a device; an account (HS256)
-     * signature failure propagates and fails the request, because the account secret is
-     * expected to always be available once configured.
+     * Message signing is fail-open. If a signature cannot be produced — for either install
+     * (ES256) or account (HS256) signing, e.g. the signature is unavailable/empty or an
+     * ASN.1/base64 decode fails — the failure is logged at error level and the request
+     * proceeds unsigned. The only fail-closed cases are an unsupported signing algorithm and a
+     * body digest configured as required that cannot be generated; both raise an
+     * {@code ApproovException}. The backend remains the enforcement point for message signatures.
      */
     @Override
     public Map<String, String> handleRequestProcessedHeaders(Request<?> request, Map<String, String> headers,

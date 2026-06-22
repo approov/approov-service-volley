@@ -11,6 +11,9 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Added a migration section to `USAGE.md` covering the behavioral changes since the pre-mutator releases.
 
 ### Fixed
+- Message signing is now fail-open symmetrically: an unavailable or empty **account** (HS256) signature no longer fails the request — it is logged at error level and the request proceeds unsigned, matching the existing install (ES256) behaviour. Only an unsupported signing algorithm or a required-but-ungeneratable body digest fail closed.
+- Genuine message-signing failures (base64/ASN.1 decode, serialization) are now surfaced as `ApproovException` rather than escaping as an unchecked exception.
+- `setApproovHeader(header, prefix)` treats a `null` prefix as no prefix (empty string), preventing a literal `"null"` from being prepended to the Approov token header value.
 - Empty-config reinitialization now preserves the active protected state when the service layer has already been initialized with a valid config.
 - Aligned Volley empty-config unit tests with the updated initialized-but-disabled behavior used by OkHttp.
 - Corrected the consumer ProGuard keep rule to reference the relocated BouncyCastle package and removed an overly broad rule that disabled enum obfuscation in consuming applications.

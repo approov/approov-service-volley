@@ -293,7 +293,10 @@ public class ApproovService {
     public static synchronized void setApproovHeader(String header, String prefix) {
         Log.d(TAG, "setApproovHeader " + header + ", " + prefix);
         approovTokenHeader = header;
-        approovTokenPrefix = prefix;
+        // A null prefix is equivalent to no prefix (empty string). Storing null here would later
+        // concatenate the literal string "null" in front of the token, producing a malformed
+        // header value. Normalise to "".
+        approovTokenPrefix = (prefix == null) ? "" : prefix;
     }
 
     /**
