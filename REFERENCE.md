@@ -161,6 +161,8 @@ Sets the request header whose value should be used for [token binding](https://a
 void setBindingHeader(String header)
 ```
 
+Automatic token binding (configured here) and manual token binding (via `setDataHashInToken`) must not be mixed — configure one or the other.
+
 ## formatApproovTokenHeaderValue
 
 Formats a raw token or status value using the configured Approov token prefix.
@@ -223,7 +225,7 @@ Performs a precheck to determine whether the app is likely to pass attestation.
 void precheck() throws ApproovException
 ```
 
-This may require network access.
+This may require network access. It is intended for development-time verification of your integration — it triggers a secure string fetch using `UNKNOWN_KEY` and evaluates that as a success path.
 
 ## getDeviceID
 
@@ -241,7 +243,7 @@ Sets arbitrary data to be hashed into subsequently fetched tokens.
 void setDataHashInToken(String data) throws ApproovException
 ```
 
-This is normally handled automatically by token binding.
+This is the manual form of token binding and is normally handled automatically via `setBindingHeader`. Manual and automatic token binding must not be mixed.
 
 ## fetchToken
 

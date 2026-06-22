@@ -32,6 +32,8 @@ import com.criticalblue.approovsdk.Approov;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
 import java.util.HashMap;
@@ -49,7 +51,7 @@ import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.SSLException;
 import javax.net.ssl.SSLSession;
 
-import okio.ByteString;
+import android.util.Base64;
 
 // ApproovService provides a mediation layer to the Approov SDK itself
 public class ApproovService {
@@ -1113,6 +1115,14 @@ class ApproovHurlStack extends HurlStack {
             HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
             PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
             httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
+
+            // The HostnameVerifier (and therefore the live-pin check) only runs during the TLS
+            // handshake of a NEW connection, never when HttpURLConnection reuses a pooled
+            // keep-alive connection. Request "Connection: close" on pinned connections so each
+            // request performs a fresh handshake: this guarantees a dynamic pin update (spec §4)
+            // takes effect on the very next request instead of lingering on a connection that was
+            // established under a now-superseded pin set.
+            httpsConnection.setRequestProperty("Connection", "close");
         }
 
         return connection;
@@ -1261,8 +1271,7 @@ final class PinningHostnameVerifier implements HostnameVerifier {
             for (Certificate cert: session.getPeerCertificates()) {
                 if (cert instanceof X509Certificate) {
                     X509Certificate x509Cert = (X509Certificate) cert;
-                    ByteString digest = ByteString.of(x509Cert.getPublicKey().getEncoded()).sha256();
-                    String hash = digest.base64();
+                    String hash = sha256Base64(x509Cert.getPublicKey().getEncoded());
                     if (hostPins.contains(hash))
                         return true;
                 }
@@ -1278,5 +1287,23 @@ final class PinningHostnameVerifier implements HostnameVerifier {
             throw new RuntimeException(e);
         }
         return false;
+    }
+
+    /**
+     * Computes the base64-encoded SHA-256 of the given bytes, matching the Approov
+     * "public-key-sha256" pin form. Uses the platform MessageDigest/Base64 so the service layer
+     * carries no third-party dependency purely for pin hashing.
+     *
+     * @param data the bytes to hash (a certificate's encoded public key)
+     * @return the base64 (no-wrap) SHA-256 digest
+     */
+    private static String sha256Base64(byte[] data) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
+            return Base64.encodeToString(digest, Base64.NO_WRAP);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is guaranteed available on every Android platform; a failure here is fatal.
+            throw new IllegalStateException("SHA-256 algorithm not available", e);
+        }
     }
 }

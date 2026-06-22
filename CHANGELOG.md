@@ -10,7 +10,12 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Added `SECURITY.md` with supported version and vulnerability reporting guidance.
 - Added a migration section to `USAGE.md` covering the behavioral changes since the pre-mutator releases.
 
+### Changed
+- Certificate public-key pin hashing now uses the platform `MessageDigest`/`Base64`, removing the `com.squareup.okhttp3:okhttp` (okio) dependency that was pulled in solely for SHA-256/base64.
+- `REFERENCE.md`: documented that `precheck` is for development-time verification, and that manual (`setDataHashInToken`) and automatic (`setBindingHeader`) token binding must not be mixed.
+
 ### Fixed
+- Pinned HTTPS connections now request `Connection: close` so a dynamic pin update takes effect on the next request. The pinning `HostnameVerifier` only runs during a new TLS handshake, so without this an established keep-alive connection could be reused under a now-superseded pin set.
 - Message signing is now fail-open symmetrically: an unavailable or empty **account** (HS256) signature no longer fails the request — it is logged at error level and the request proceeds unsigned, matching the existing install (ES256) behaviour. Only an unsupported signing algorithm or a required-but-ungeneratable body digest fail closed.
 - Genuine message-signing failures (base64/ASN.1 decode, serialization) are now surfaced as `ApproovException` rather than escaping as an unchecked exception.
 - `setApproovHeader(header, prefix)` treats a `null` prefix as no prefix (empty string), preventing a literal `"null"` from being prepended to the Approov token header value.
