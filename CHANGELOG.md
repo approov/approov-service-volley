@@ -7,6 +7,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 ## [3.5.5] - 2026-06-05
 
 ### Added
+- Automatic release tagging on merge to `main` (`tag-release` job in `build_and_test.yml`): once the build/tests pass, the top CHANGELOG entry drives a matching git tag, which triggers the Maven publish workflow. Skipped if the tag already exists.
 - Added `SECURITY.md` with supported version and vulnerability reporting guidance.
 - Added a migration section to `USAGE.md` covering the behavioral changes since the pre-mutator releases.
 
