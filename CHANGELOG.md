@@ -12,7 +12,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - Added a migration section to `USAGE.md` covering the behavioral changes since the pre-mutator releases.
 
 ### Changed
-- Certificate public-key pin hashing now uses the platform `MessageDigest`/`Base64`, removing the `com.squareup.okhttp3:okhttp` (okio) dependency that was pulled in solely for SHA-256/base64.
+- Certificate public-key pin hashing now uses the platform `MessageDigest`/`Base64`, so the service layer's own code no longer references `com.squareup.okhttp3:okhttp` (okio), which was previously pulled in solely for SHA-256/base64. Note: `okhttp` is retained as a `runtime`-scope dependency because the closed-source Approov SDK (`approov-android-sdk`) uses okhttp3 internally and does not declare it itself; dropping it entirely makes `Approov.initialize()` fail with `NoClassDefFoundError: okhttp3.EventListener` in consuming apps.
 - `REFERENCE.md`: documented that `precheck` is for development-time verification, and that manual (`setDataHashInToken`) and automatic (`setBindingHeader`) token binding must not be mixed.
 
 ### Fixed

@@ -79,11 +79,17 @@ dependencies {
     shadowed 'org.bouncycastle:bcprov-jdk15to18:1.80'
     implementation files(tasks.named('shadowJar'))
     implementation 'androidx.annotation:annotation-jvm:1.9.1'
+    // The closed-source Approov SDK (io.approov:approov-android-sdk:3.5.3) uses okhttp3 internally
+    // (okhttp3.Request/Call/CertificatePinner/EventListener). It does not bundle or declare okhttp,
+    // so the service layer must supply it transitively at runtime, otherwise Approov.initialize()
+    // fails with NoClassDefFoundError: okhttp3.EventListener. The service layer's OWN code no longer
+    // references okhttp (pin hashing moved to the platform MessageDigest/Base64), hence runtimeOnly
+    // rather than implementation: it is shipped/declared for the SDK but kept off the compile classpath.
+    runtimeOnly 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-inline:5.2.0'
-    // Test-only: the message-signing unit tests (SignatureBaseBuilderTest, TestComponentProvider)
-    // build fixture requests with okhttp3.Request/Headers. Production code no longer depends on
-    // okhttp, so this stays a testImplementation and is not shipped in the AAR.
+    // Test-only compile dependency: the message-signing unit tests (SignatureBaseBuilderTest,
+    // TestComponentProvider) build fixture requests with okhttp3.Request/Headers.
     testImplementation 'com.squareup.okhttp3:okhttp:4.12.0'
     if (findProject(':approov-sdk') != null) {
         testImplementation project(':approov-sdk')
