@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       WORKSPACE: "${{ github.workspace }}"
       GIT_BRANCH: "${{ github.ref }}"
       CURRENT_TAG: "${{ github.ref_name }}"
@@ -23,10 +24,19 @@ jobs:
       run: git config --global --add safe.directory '*'
       
     - name: Checkout Repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
+      with:
+        path: approov-service-volley
+
+    - name: Checkout Core Testing Framework
+      uses: actions/checkout@v6
+      with:
+        repository: approov/core-service-layers-testing
+        token: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT }}
+        path: core-service-layers-testing
 
     - name: Set Up Java
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         distribution: 'temurin' # Use Eclipse Temurin distribution
         java-version: '21'      # Use Java 21 for Android builds
@@ -70,17 +80,44 @@ jobs:
         KEY_ID=$(gpg --list-keys --with-colons | grep pub | cut -d: -f5)
         echo -e "trust\n5\ny\nquit" | gpg --batch --yes --command-fd 0 --edit-key $KEY_ID
     
+    # Fail fast if the release tag and the CHANGELOG have drifted, before any
+    # build or publish work. The top "## [x.y.z]" entry must match the tag.
+    - name: Verify CHANGELOG matches tag
+      working-directory: approov-service-volley
+      run: |
+        TAG="${{ github.ref_name }}"
+        CHANGELOG_VERSION=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
+        if [ -z "$CHANGELOG_VERSION" ]; then
+          echo "::error::Could not find a version header (## [x.y.z]) in CHANGELOG.md"
+          exit 1
+        fi
+        if [ "$CHANGELOG_VERSION" != "$TAG" ]; then
+          echo "::error::CHANGELOG.md top entry ($CHANGELOG_VERSION) does not match release tag ($TAG). Update CHANGELOG.md before tagging."
+          exit 1
+        fi
+        echo "CHANGELOG.md top entry matches tag: $TAG"
+
+    - name: Run Tests
+      working-directory: approov-service-volley
+      run: ./gradlew test
+
+    # Bake the release version (the git tag) into the AAR so the runtime user
+    # property reports it, e.g. "approov-service-volley/3.5.7". The tag is the
+    # same value used for the pom and artifact names, keeping them in lockstep.
     - name: Build AAR
-      run:  ./gradlew assembleRelease
+      working-directory: approov-service-volley
+      run: ./gradlew assembleRelease -PapproovServiceVersion=${{ github.ref_name }}
 
     - name: Create Package
+      working-directory: approov-service-volley
       run: cd .maven && ./build-and-sign.sh
 
     - name: Publish Package
+      working-directory: approov-service-volley
       run: cd .maven && ./maven-publish.sh
       
     - name: Upload Artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: full-repo-artifact-${{ github.ref_name }}
-        path: ${{ github.workspace }}
+        path: ${{ github.workspace }}/approov-service-volley

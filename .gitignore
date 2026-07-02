@@ -52,3 +52,6 @@ Pods/
 **/*.userprefs
 **/*.user
 **/.vs/
+
+# Local-only review notes — never commit
+TESTING_NOTES-volley.md
