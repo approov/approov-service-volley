@@ -4,6 +4,11 @@ All notable changes to this package will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [3.5.6] - 2026-10-07
+
+### Changed
+- `prefetch()` is now deprecated and does nothing, retained so existing callers still compile. The Approov SDK starts its own initialization fetch, so a service layer should not fetch on its own. The package-private `PrefetchCallbackHandler` is removed.
+
 ## [3.5.5] - 2026-06-05
 
 ### Added
