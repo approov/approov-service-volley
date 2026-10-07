@@ -19,17 +19,40 @@ package io.approov.service.volley;
 
 import com.android.volley.AuthFailureError;
 
-// ApproovException is thrown if there is an error from Approov. The exceptions are derived from
-// the volley AuthFailureError for compatibility with request.getHeaders() implementations that
-// may need to call ApproovService.substituteHeader.
+/**
+ * Base exception indicating an error while using the Approov SDK.
+ * <p>
+ * The exceptions are derived from Volley {@link AuthFailureError} for compatibility with
+ * request header providers that may need to call {@link ApproovService#substituteHeader}.
+ */
 public class ApproovException extends AuthFailureError {
 
     /**
      * Constructs an exception due to an Approov error.
      *
-     * @param message is the basic information about the exception cause
+     * @param message information describing the exception cause
      */
     public ApproovException(String message) {
         super(message);
+    }
+
+    /**
+     * Constructs an exception with an underlying cause.
+     *
+     * @param message information describing the exception cause
+     * @param cause underlying cause of the exception
+     */
+    public ApproovException(String message, Throwable cause) {
+        super(message, cause instanceof Exception ? (Exception) cause : new Exception(cause));
+    }
+
+    /**
+     * Constructs an exception with an underlying cause, using the cause message when available.
+     *
+     * @param cause underlying cause of the exception
+     */
+    public ApproovException(Throwable cause) {
+        super("Wrapped " + cause.getClass().getName() + ": " + cause.getMessage(),
+                cause instanceof Exception ? (Exception) cause : new Exception(cause));
     }
 }

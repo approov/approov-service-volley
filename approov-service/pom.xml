@@ -31,6 +31,10 @@
     <developerConnection>scm:git:ssh://github.com/approov/approov-service-volley.git</developerConnection>
   </scm>
   <dependencies>
+    <!-- Required at runtime by the closed-source Approov SDK (approov-android-sdk), which uses
+         okhttp3 internally but does not declare it. Removing this makes Approov.initialize() fail
+         with NoClassDefFoundError: okhttp3.EventListener in consuming apps. The service layer's own
+         code no longer uses okhttp, hence runtime scope only. -->
     <dependency>
         <groupId>com.squareup.okhttp3</groupId>
         <artifactId>okhttp</artifactId>
