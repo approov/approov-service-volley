@@ -211,11 +211,13 @@ void removeExclusionURLRegex(String urlRegex)
 
 ## prefetch
 
-Starts an asynchronous prefetch to reduce the latency of a later fetch.
+Legacy compatibility API.
 
 ```java
 void prefetch()
 ```
+
+**Obsolete / Deprecated:** This method no longer has any effect. The Approov SDK starts its own initialization fetch when it is initialized, so a service layer does not fetch on its own.
 
 ## precheck
 

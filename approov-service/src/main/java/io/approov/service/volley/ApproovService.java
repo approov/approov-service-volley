@@ -482,14 +482,15 @@ public class ApproovService {
     }
 
     /**
-     * Prefetches in the background to lower the effective latency of a subsequent token fetch or
-     * secure string fetch by starting the operation earlier so the subsequent fetch may be able to
-     * use cached data.
+     * Previously started a background token fetch to lower the latency of a subsequent fetch.
+     *
+     * @deprecated The Approov SDK starts its own initialization fetch when it is initialized, so a
+     * service layer should not fetch on its own. This method is retained for compatibility but
+     * does nothing.
      */
+    @Deprecated
     public static synchronized void prefetch() {
-        if (hurlStack != null)
-            // fetch an Approov token using a placeholder domain
-            Approov.fetchApproovToken(new PrefetchCallbackHandler(), "approov.io");
+        Log.d(TAG, "prefetch is deprecated and does nothing.");
     }
 
     // Performs a precheck to determine if the app will pass attestation. This requires secure
@@ -1029,23 +1030,6 @@ public class ApproovService {
             }
         }
         return url;
-    }
-}
-
-/**
- * Callback handler for prefetching from Approov. We simply log as we don't need the result
- * itself, as it will be returned as a cached value on a subsequent etch.
- */
-final class PrefetchCallbackHandler implements Approov.TokenFetchCallback {
-    // logging tag
-    private static final String TAG = "ApproovPrefetch";
-
-    @Override
-    public void approovCallback(Approov.TokenFetchResult pResult) {
-        if (pResult.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL)
-            Log.d(TAG, "Approov prefetch success");
-        else
-            Log.e(TAG, "Approov prefetch failure: " + pResult.getStatus().toString());
     }
 }
 
