@@ -38,7 +38,7 @@ implementation("com.android.volley:volley:1.2.1")
 
 Your app uses Volley types, such as `RequestQueue`, so declare Volley in your app too. The package uses Volley 1.2.1. Gradle uses the highest Volley version that anything in your app asks for.
 
-The package supports Android 6.0 (API level 23) and later. The Approov SDK needs OkHttp at run time, so the package adds OkHttp to your app. The package does not use it for your requests.
+The package supports Android 6.0 (API level 23) and later. The Approov SDK needs OkHttp at run time, so the package adds OkHttp to your app. The package uses only the OkHttp URL parser, to sign each URL in the form that Android sends. It does not send your requests with OkHttp.
 
 Add these permissions to your app manifest:
 

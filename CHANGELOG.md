@@ -30,6 +30,8 @@ Entries marked **Breaking** need a source change. See [Upgrading from 3.5.x](REA
 - `Content-Length` is not a covered component of a signature, because the platform adds it after signing. `Content-Digest` covers the body.
 - A missing install or account signature is logged as a warning once per process, and a request sent unsigned as an error once per process. Later occurrences are logged at debug level.
 - The signed `@target-uri` leaves out an explicit default port (`:443` for `https`, `:80` for `http`) and any `#fragment`, and the `@authority` is the lowercase host with a non-default port. The URL is no longer read with `java.net.URI`, so a URL it rejects, such as one with `|` in the query, is signed. A host factory is matched by host name without regard to case and without a port.
+- The package signs and sends the URL in the normalized form that Android sends. It percent-encodes the characters that Android percent-encodes, such as `|` or a space in the path and characters that are not ASCII, and keeps existing escapes. If the package cannot parse a URL, it sends the request unsigned.
+- The default factory covers `Content-Type` on a request with a body, with the value that Volley sends: `getBodyContentType()`, or the `Content-Type` from `getHeaders()`.
 - Message signatures take their `created` and `expires` times from the server adjusted time.
 - `getLastARC()` makes no token fetch of its own. It returns the ARC of the most recent token, secure string or custom JWT fetch, or an empty string.
 - BouncyCastle is replaced by Google Tink 1.23.0. It is bundled in the AAR and relocated, so it cannot clash with your own dependencies. The published POM adds none.

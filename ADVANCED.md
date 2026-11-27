@@ -99,9 +99,11 @@ Once the signer is installed, every request that carries the Approov token heade
 
 You can add the account signature, `hmac-sha256`, with `setUseInstallAndAccountMessageSigning()` on the factory. It uses a shared account key, delivered to the app when it passes attestation. Its member is `account`. Both are members of the same `Signature` and `Signature-Input` headers, over the same covered components. If one signature cannot be produced, the request goes ahead with the other, or unsigned.
 
+The package signs the URL in the normalized form that Android sends. Before Android sends a request, it percent-encodes some characters, such as `|` or a space in the path, and any character that is not ASCII. The package encodes the URL in the same way before it signs and sends the request. It keeps the escapes that are already in the URL, such as `%20`. So the package signs and sends `https://api.example.com/café?q=a|b` as `https://api.example.com/caf%C3%A9?q=a|b`. If the package cannot parse a URL, it sends the request as written and unsigned, and logs an error once.
+
 The signed target URI, and the authority if you cover it, leave out a default port: `:443` for `https` and `:80` for `http`. So `https://api.example.com:443/v1` and `https://api.example.com/v1` give the same signature base.
 
-`Content-Length` is not a covered component, because the platform adds it after the package signs the request. Use the `Content-Digest` header to cover the body. The package adds it for POST, PUT and PATCH requests that have a body. Volley sends no body for any other method, so no digest is made for it, even if your `Request` returns a body.
+The default factory covers `Content-Type` when the request sends it. A POST, PUT or PATCH request with a body sends the value of `getBodyContentType()`, or the `Content-Type` that `getHeaders()` gives, which has precedence. `Content-Length` is not a covered component, because the platform adds it after the package signs the request. Use the `Content-Digest` header to cover the body. The package adds it for POST, PUT and PATCH requests that have a body. Volley sends no body for any other method, so no digest is made for it, even if your `Request` returns a body.
 
 A request to a secrets-only API that the SDK reports as `UNPROTECTED_URL` carries no token header and is not signed. A request to an Approov protected host can go ahead after a failed token fetch. It then still carries the token header, empty or with the status. So the signer signs it too, over that value.
 
