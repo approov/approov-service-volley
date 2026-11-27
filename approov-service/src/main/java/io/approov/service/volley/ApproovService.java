@@ -60,8 +60,8 @@ public class ApproovService {
     // default header that will carry any optional Approov TraceID debug value
     private static final String APPROOV_TRACE_ID_HEADER = "Approov-TraceID";
 
-    // alternative http stack to be used that adds token and pinning, or null if could not be initialized
-    private static ApproovHurlStack hurlStack = null;
+    // the one http stack that adds token and pinning once protection is enabled and sends untouched before
+    private static final ApproovHurlStack hurlStack = new ApproovHurlStack();
 
     // true if the service layer has been successfully initialized, bypass mode included
     private static boolean isInitialized = false;
@@ -458,7 +458,6 @@ public class ApproovService {
      */
     private static synchronized void resetConfiguration() {
         lastARC = "";
-        hurlStack = new ApproovHurlStack();
         approovTokenHeader = APPROOV_TOKEN_HEADER;
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         approovTraceIDHeader = APPROOV_TRACE_ID_HEADER;
@@ -554,7 +553,6 @@ public class ApproovService {
         ApproovHurlStack.forgetRequestMutators();
         ApproovHurlStack.resetWarnings();
         PinningHostnameVerifier.resetWarnings();
-        hurlStack = null;
         isInitialized = false;
         approovProtectionEnabled = false;
         lastARC = "";
@@ -1389,15 +1387,15 @@ public class ApproovService {
     }
 
     /**
-     * Provides the Approov enabled BaseHttpStack to be used for volley. This
-     * adds Approov tokens and pinning.
+     * Provides the Approov enabled BaseHttpStack to be used for volley. This adds Approov tokens and pinning.
+     * The stack is always available and is the same instance for the life of the process. Before protection
+     * is enabled, which is before initialize and in bypass mode, it sends requests untouched: no token fetch, no
+     * Approov headers, no message signature and no Approov pinning. Once initialize enables protection, the
+     * same stack protects requests, so a stack or a request queue built earlier needs no replacement.
      *
-     * @return Approov BaseHttpStack to use, or null if not available
+     * @return Approov BaseHttpStack to use, never null
      */
-    public static synchronized BaseHttpStack getBaseHttpStack() {
-        if (!isApproovEnabled()) {
-            return null;
-        }
+    public static BaseHttpStack getBaseHttpStack() {
         return hurlStack;
     }
 

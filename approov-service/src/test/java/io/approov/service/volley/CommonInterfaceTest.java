@@ -120,7 +120,7 @@ public class CommonInterfaceTest {
     public void theEnabledFlagsFollowInitialization() {
         assertFalse(ApproovService.isApproovServiceEnabled());
         assertFalse(ApproovService.isApproovProtectionEnabled());
-        assertNull(ApproovService.getBaseHttpStack());
+        assertNotNull(ApproovService.getBaseHttpStack());
 
         ApproovService.initialize(context, "");
         assertTrue(ApproovService.isApproovServiceEnabled());

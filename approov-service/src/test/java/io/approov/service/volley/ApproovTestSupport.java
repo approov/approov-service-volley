@@ -25,7 +25,6 @@ final class ApproovTestSupport {
     }
 
     static void resetApproovServiceState() {
-        setStaticField("hurlStack", null);
         setStaticField("isInitialized", false);
         setStaticField("approovProtectionEnabled", false);
         setStaticField("lastARC", "");
