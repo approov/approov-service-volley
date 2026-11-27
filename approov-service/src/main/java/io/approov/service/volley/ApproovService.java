@@ -552,6 +552,7 @@ public class ApproovService {
     @VisibleForTesting
     static synchronized void reset() {
         ApproovHurlStack.forgetRequestMutators();
+        ApproovHurlStack.resetWarnings();
         PinningHostnameVerifier.resetWarnings();
         hurlStack = null;
         isInitialized = false;

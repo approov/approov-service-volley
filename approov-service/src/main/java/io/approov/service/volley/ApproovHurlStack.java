@@ -36,6 +36,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -563,6 +564,9 @@ class ApproovHurlStack extends HurlStack {
             throw new ApproovException(message);
         }
 
+        // the token and trace headers are set by the layer, so a callback cannot drop or change them
+        processed = restoreApproovHeaders(processed, approovHeaders, changes);
+
         // a header the callback set or changed that a header cannot carry is an app configuration error
         for (Map.Entry<String, String> entry : processed.entrySet()) {
             String value = entry.getValue();
@@ -576,6 +580,53 @@ class ApproovHurlStack extends HurlStack {
         putAllHeaders(wireHeaders, appHeaders);
         putAllHeaders(wireHeaders, processed);
         return attempt.sent(view, wireHeaders);
+    }
+
+    // true once the warning for a token or trace header the processed headers hook removed or changed is logged
+    private static final AtomicBoolean tokenRestoreLogged = new AtomicBoolean();
+    private static final AtomicBoolean traceRestoreLogged = new AtomicBoolean();
+
+    // clears the once per process flags of the restore warnings
+    static void resetWarnings() {
+        tokenRestoreLogged.set(false);
+        traceRestoreLogged.set(false);
+    }
+
+    /**
+     * Puts back the token and trace headers the layer set for an attempt, if the processed headers hook
+     * returned headers without them or with other values. The layer sets these headers independently of the
+     * mutator, so a mutator cannot drop them. The first time for each header in a process a warning is logged.
+     *
+     * @param processed are the headers the hook returned
+     * @param layerHeaders are the headers the layer set for the attempt, with their values
+     * @param changes are the mutations of the attempt, which name the token and trace headers
+     * @return the headers with the layer's token and trace headers, which is the same map if none changed
+     */
+    static Map<String, String> restoreApproovHeaders(Map<String, String> processed,
+            Map<String, String> layerHeaders, ApproovRequestMutations changes) {
+        Map<String, String> restored = processed;
+        String[] names = {changes.getTokenHeaderKey(), changes.getTraceIDHeaderKey()};
+        AtomicBoolean[] logged = {tokenRestoreLogged, traceRestoreLogged};
+        String[] kinds = {"token", "trace"};
+        for (int i = 0; i < names.length; i++) {
+            String name = names[i];
+            if (name == null)
+                continue;
+            String expected = header(layerHeaders, name);
+            if ((expected == null) || expected.equals(header(restored, name)))
+                continue;
+            if (restored == processed)
+                restored = new LinkedHashMap<>(processed);
+            removeHeader(restored, name);
+            restored.put(name, expected);
+            String message = "handleRequestProcessedHeaders: removed or changed the Approov " + kinds[i]
+                    + " header, restored";
+            if (logged[i].compareAndSet(false, true))
+                ApproovLog.w(TAG, message);
+            else
+                ApproovLog.d(TAG, message);
+        }
+        return restored;
     }
 
     /**

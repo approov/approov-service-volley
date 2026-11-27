@@ -386,6 +386,16 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         Map<String, String> processed = decisions().handleRequestProcessedHeaders(request, headers, changes);
         if (processed == null)
             return null;
+        // the layer's token and trace headers are put back before signing, so that the signature covers them
+        if (changes != null) {
+            Map<String, String> layerHeaders = new LinkedHashMap<>();
+            for (String name : new String[]{changes.getTokenHeaderKey(), changes.getTraceIDHeaderKey()}) {
+                String value = (name != null) ? ApproovHurlStack.header(headers, name) : null;
+                if (value != null)
+                    layerHeaders.put(name, value);
+            }
+            processed = ApproovHurlStack.restoreApproovHeaders(processed, layerHeaders, changes);
+        }
         try {
             return sign(request, processed, changes);
         } catch (ApproovException e) {
