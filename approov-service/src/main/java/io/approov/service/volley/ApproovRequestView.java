@@ -54,7 +54,8 @@ final class ApproovRequestView extends Request<Object> {
 
     /**
      * Reads an app's request once. A DEPRECATED_GET_OR_POST request is given the method HurlStack sends it with,
-     * POST if it has a body and GET otherwise.
+     * POST if it has a body and GET otherwise. The body is the one HurlStack sends, which is none for any
+     * method but POST, PUT and PATCH.
      *
      * @param request is the app's request
      * @param headers are the headers of the attempt
@@ -71,10 +72,24 @@ final class ApproovRequestView extends Request<Object> {
             byte[] postBody = request.getPostBody();
             body = postBody;
             method = (body != null) ? Method.POST : Method.GET;
-        } else {
+        } else if (sendsBody(method)) {
             body = request.getBody();
+        } else {
+            // the stack sends no body for any other method, so none is read, signed or digested
+            body = null;
         }
         return new ApproovRequestView(request, request.getUrl(), method, body, headers);
+    }
+
+    /**
+     * Tells whether HurlStack writes the body of a request with the method. It does for POST, PUT and PATCH only.
+     * GET, DELETE, HEAD, OPTIONS and TRACE go without a body, even if getBody gives one.
+     *
+     * @param method is the method of the request
+     * @return true if the method is sent with a body
+     */
+    private static boolean sendsBody(int method) {
+        return (method == Method.POST) || (method == Method.PUT) || (method == Method.PATCH);
     }
 
     /**
