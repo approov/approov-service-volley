@@ -33,11 +33,14 @@ import com.criticalblue.minisdk.testing.AttesterProxyController;
 
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import javax.net.ssl.HostnameVerifier;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSocketFactory;
 
@@ -53,6 +56,11 @@ import okhttp3.tls.HeldCertificate;
  * other crosses origins. The platform trust (the default SSL socket factory of HttpsURLConnection) trusts
  * both servers for the life of the fixture. The layer is initialized with Approov protection against the
  * mini-SDK as a new process would, so no initialize comment is needed.
+ * <p>
+ * The JVM's HttpsURLConnection asks the hostname verifier of a connection only when the certificate does not
+ * name the host, so a pin check is only made on the JVM with a certificate that names neither host. Such a
+ * fixture also sets a platform default HostnameVerifier that accepts any name, which stands in for the
+ * platform's own host name check that passes on a device.
  */
 final class MiniSdkHttpsOrigins {
     static final String CONFIG = "#test-account#mAxOF0ekJUOC36J5XWmVmVipOcUoEdMjhPSp2FVtyTo=";
@@ -66,13 +74,29 @@ final class MiniSdkHttpsOrigins {
     final Context context = ApplicationProvider.getApplicationContext();
     final MockWebServer first = new MockWebServer();
     final MockWebServer second = new MockWebServer();
+    // the certificate of both servers
+    final HeldCertificate certificate;
     private final SSLSocketFactory previousFactory;
+    private final HostnameVerifier previousVerifier;
 
     MiniSdkHttpsOrigins(boolean secondOverTls) throws Exception {
-        HeldCertificate certificate = new HeldCertificate.Builder()
-                .addSubjectAlternativeName("localhost")
-                .addSubjectAlternativeName("127.0.0.1")
-                .build();
+        this(secondOverTls, true);
+    }
+
+    /**
+     * Starts the two origins.
+     *
+     * @param secondOverTls is true if the second origin uses TLS
+     * @param namesHosts is true if the certificate names both hosts, false if it names neither, so that the
+     * JVM asks the hostname verifier of each connection, where the layer checks the pins
+     */
+    MiniSdkHttpsOrigins(boolean secondOverTls, boolean namesHosts) throws Exception {
+        HeldCertificate.Builder builder = new HeldCertificate.Builder();
+        if (namesHosts)
+            builder.addSubjectAlternativeName("localhost").addSubjectAlternativeName("127.0.0.1");
+        else
+            builder.addSubjectAlternativeName("approov-pinning.invalid");
+        certificate = builder.build();
         HandshakeCertificates serverHandshake = new HandshakeCertificates.Builder()
                 .heldCertificate(certificate)
                 .build();
@@ -86,6 +110,16 @@ final class MiniSdkHttpsOrigins {
                 .build();
         previousFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         HttpsURLConnection.setDefaultSSLSocketFactory(clientHandshake.sslSocketFactory());
+        previousVerifier = HttpsURLConnection.getDefaultHostnameVerifier();
+        if (!namesHosts)
+            HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+    }
+
+    /** The pin of the servers' certificate, the base64 SHA-256 of its public key as the SDK gives it. */
+    String serverPin() throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(
+                certificate.certificate().getPublicKey().getEncoded());
+        return Base64.getEncoder().encodeToString(digest);
     }
 
     /** A URL on the first origin, https://localhost:port/path. */
@@ -152,6 +186,7 @@ final class MiniSdkHttpsOrigins {
 
     void shutdown() throws Exception {
         HttpsURLConnection.setDefaultSSLSocketFactory(previousFactory);
+        HttpsURLConnection.setDefaultHostnameVerifier(previousVerifier);
         first.shutdown();
         second.shutdown();
         MiniSdkHook.uninstall();

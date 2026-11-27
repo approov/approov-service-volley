@@ -229,6 +229,11 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         return decisions().handleRequestQueryParamSubstitutionResult(approovResults, queryKey);
     }
 
+    @Override
+    public boolean handlePinningShouldProcessRequest(Request<?> request) {
+        return decisions().handlePinningShouldProcessRequest(request);
+    }
+
     /**
      * Sets the factory used for every host without a factory of its own.
      *

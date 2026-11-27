@@ -60,8 +60,9 @@ class ApproovHurlStack extends HurlStack {
     // the maximum number of redirects followed for one request, as HttpURLConnection follows
     static final int MAX_FOLLOW_UPS = 20;
 
-    // true while this thread sends an attempt whose redirects the layer follows itself
-    private static final ThreadLocal<Boolean> followsInLayer = new ThreadLocal<>();
+    // how the attempt this thread is sending is connected, as HurlStack creates the connection on the thread
+    // that sends it and createConnection is not given the request
+    private static final ThreadLocal<AttemptConnection> sending = new ThreadLocal<>();
 
     // the service mutator each request was first processed with, so that a mutator change while a request is in
     // flight never applies to its later attempts, such as a redirect or a Volley retry
@@ -119,26 +120,29 @@ class ApproovHurlStack extends HurlStack {
 
     /**
      * Adds pinning to the connection by overriding the HostnameVerifier with something that pins
-     * the connections. The connection must be for https.
+     * the connections, unless the service mutator opted the attempt out of pinning. Only an https
+     * connection is pinned.
      */
     @Override
     protected HttpURLConnection createConnection(URL url) throws IOException {
         HttpURLConnection connection = super.createConnection(url);
+        AttemptConnection attempt = sending.get();
 
         // the layer follows the redirects of a request it processes itself, as the platform would carry every
         // Approov header and substituted secure string to the redirect target; any other request follows them
         // as the platform does (the instance setting also works around the M release HttpURLConnection not
         // observing the HttpURLConnection.setFollowRedirects() property,
         // https://code.google.com/p/android/issues/detail?id=194495)
-        connection.setInstanceFollowRedirects(!Boolean.TRUE.equals(followsInLayer.get())
+        connection.setInstanceFollowRedirects(((attempt == null) || !attempt.followsInLayer)
                 && HttpURLConnection.getFollowRedirects());
 
-        if (!ApproovService.isApproovEnabled()) {
+        if (!ApproovService.isApproovProtectionEnabled()) {
             return connection;
         }
 
-        // ensure the connection is pinned
-        if (connection instanceof HttpsURLConnection) {
+        // ensure the connection is pinned, unless the attempt opted out; a connection not made for an attempt
+        // this stack sends is pinned, as the pinning hook can only remove pinning
+        if ((connection instanceof HttpsURLConnection) && ((attempt == null) || attempt.pinned)) {
             HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
             PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
             httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
@@ -187,7 +191,7 @@ class ApproovHurlStack extends HurlStack {
         if ("websocket".equalsIgnoreCase((upgrade != null) ? upgrade.trim() : null)) {
             ApproovLog.d(TAG, "WebSocket upgrade to " + ApproovService.loggableHost(attempt.url)
                     + " sent without Approov processing (not supported)");
-            return executeNetworkRequest(attempt.view, attempt.untouched().wireHeaders);
+            return send(attempt.untouched(), false, true);
         }
 
         // check if we are to proceed with any Approov processing, under the mutator in force when the layer
@@ -195,21 +199,17 @@ class ApproovHurlStack extends HurlStack {
         ApproovServiceMutator mutator = mutatorFor(request);
         Map<String, String> hookHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(cacheHeaders));
         if (!ApproovService.callMutator("handleRequestShouldProcess",
-                () -> mutator.handleRequestShouldProcess(request, hookHeaders)))
-            return executeNetworkRequest(attempt.view, attempt.untouched().wireHeaders);
+                () -> mutator.handleRequestShouldProcess(request, hookHeaders))) {
+            Attempt untouched = attempt.untouched();
+            return send(untouched, false, shouldPin(untouched, mutator));
+        }
 
         // protect the request for its URL and send it, then follow any redirect, each hop protected for its own
         // URL
         Attempt sent = protect(attempt, mutator, true);
         int followUps = 0;
         while (true) {
-            HttpResponse response;
-            followsInLayer.set(Boolean.TRUE);
-            try {
-                response = executeNetworkRequest(sent.view, sent.wireHeaders);
-            } finally {
-                followsInLayer.remove();
-            }
+            HttpResponse response = send(sent, true, shouldPin(sent, mutator));
             Attempt next = attempt.redirect(response);
             if (next == null)
                 return response;
@@ -227,6 +227,44 @@ class ApproovHurlStack extends HurlStack {
                 sent = protect(attempt, mutator, false);
             else
                 sent = attempt.untouched();
+        }
+    }
+
+    /**
+     * Asks the service mutator whether Approov pinning applies to an attempt, with the attempt as it is sent.
+     *
+     * @param sent is the attempt to send
+     * @param mutator is the service mutator the request was first processed with
+     * @return true if the attempt is to be pinned, false for OS trust only
+     * @throws ApproovException if the mutator aborts the request, reported as a hook failure naming the hook
+     */
+    private static boolean shouldPin(Attempt sent, ApproovServiceMutator mutator) throws ApproovException {
+        ApproovRequestView view = sent.view;
+        return ApproovService.callMutator("handlePinningShouldProcessRequest",
+                () -> mutator.handlePinningShouldProcessRequest(view));
+    }
+
+    /**
+     * Sends one network attempt with its wire headers, connected as given.
+     *
+     * @param sent is the attempt to send
+     * @param followsInLayer is true if the layer follows its redirects, false if the platform does
+     * @param pinned is true if Approov pinning applies to its connection
+     * @return the response
+     * @throws IOException if the request fails
+     * @throws AuthFailureError if the request's body cannot be read
+     */
+    private HttpResponse send(Attempt sent, boolean followsInLayer, boolean pinned)
+            throws IOException, AuthFailureError {
+        AttemptConnection previous = sending.get();
+        sending.set(new AttemptConnection(followsInLayer, pinned));
+        try {
+            return executeNetworkRequest(sent.view, sent.wireHeaders);
+        } finally {
+            if (previous == null)
+                sending.remove();
+            else
+                sending.set(previous);
         }
     }
 
@@ -859,6 +897,22 @@ class ApproovHurlStack extends HurlStack {
                 return header.getValue();
         }
         return null;
+    }
+
+    /**
+     * How one network attempt is connected: whether the layer or the platform follows its redirects, and whether
+     * Approov pinning applies to it.
+     */
+    static final class AttemptConnection {
+        // true if the layer follows the redirects of the attempt itself
+        final boolean followsInLayer;
+        // true if Approov pinning applies to the connection
+        final boolean pinned;
+
+        AttemptConnection(boolean followsInLayer, boolean pinned) {
+            this.followsInLayer = followsInLayer;
+            this.pinned = pinned;
+        }
     }
 
     /**

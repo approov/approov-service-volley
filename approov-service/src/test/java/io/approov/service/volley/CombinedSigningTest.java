@@ -140,6 +140,12 @@ public class CombinedSigningTest {
             record("handleRequestProcessedHeaders", request, headers, changes);
             return processedResult;
         }
+
+        @Override
+        public boolean handlePinningShouldProcessRequest(Request<?> request) {
+            record("handlePinningShouldProcessRequest", request);
+            return false;
+        }
     }
 
     interface ThrowingCall {
@@ -208,6 +214,7 @@ public class CombinedSigningTest {
         assertEquals("decided", signer.handleRequestTokenHeaderValue(success, URL));
         assertFalse(signer.handleRequestHeaderSubstitutionResult(success, "X-Api-Key"));
         assertFalse(signer.handleRequestQueryParamSubstitutionResult(success, "key"));
+        assertFalse(signer.handlePinningShouldProcessRequest(request));
         assertDecidedBy("handlePrecheckResult", () -> signer.handlePrecheckResult(success));
         assertDecidedBy("handleFetchTokenResult", () -> signer.handleFetchTokenResult(success));
         assertDecidedBy("handleFetchSecureStringResult",

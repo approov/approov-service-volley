@@ -373,4 +373,19 @@ public interface ApproovServiceMutator {
         }
         return headers;
     }
+
+    /**
+     * Decides whether Approov pinning applies to a request. This is asked for each request the layer sends
+     * while Approov protection is enabled, and again for each redirect the layer follows, with the request as
+     * it is sent to that URL. A request it opts out is checked by OS trust only. The standard mutators pin
+     * every request. An overriding implementation may abort the request by throwing a RuntimeException, which
+     * fails it with an ApproovException naming this hook.
+     *
+     * @param request is the request being sent
+     * @return true if pinning should be applied, false to skip it
+     */
+    default boolean handlePinningShouldProcessRequest(Request<?> request) {
+        // by default do not skip pinning for any requests
+        return true;
+    }
 }
