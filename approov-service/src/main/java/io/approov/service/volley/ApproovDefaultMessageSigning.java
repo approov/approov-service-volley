@@ -277,6 +277,8 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      * @param provider the component provider for the request
      * @param changes the mutations applied to the request by Approov
      * @return the signature parameters, or null if the request is not to be signed
+     * @throws RequiredBodyDigestException if a body digest configured as required cannot be generated, which
+     * aborts the request, while any other exception leaves the request unsigned
      */
     protected SignatureParameters buildSignatureParameters(VolleyComponentProvider provider,
             ApproovRequestMutations changes) {
@@ -379,7 +381,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         Map<String, String> processed = decisions().handleRequestProcessedHeaders(request, headers, changes);
         if (processed == null)
             return null;
-        return sign(request, processed, changes);
+        try {
+            return sign(request, processed, changes);
+        } catch (ApproovException e) {
+            // the signing decisions keep their own type rather than being reported as a failing mutator hook
+            throw ApproovService.standardDecision(e);
+        }
     }
 
     private Map<String, String> sign(Request<?> request, Map<String, String> headers,
@@ -401,15 +408,20 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
         boolean hadContentDigest = provider.hasField("Content-Digest");
 
-        // Message signing is fail-open (TESTING_REQUIREMENTS §5). Only two conditions fail closed and
-        // abort the request: (1) a REQUIRED body digest that cannot be generated, and (2) an
-        // unsupported signing algorithm. buildSignatureParameters is where a required digest is
-        // enforced, so it runs first and its failure is surfaced as ApproovException (fail closed).
+        // Message signing is fail-open. Only two conditions fail closed and abort the request: (1) a body
+        // digest configured as required that cannot be generated, and (2) an unsupported signing algorithm.
+        // Building the signature parameters only aborts the request for the first, while any other failure
+        // (including from a custom factory or subclass) leaves the request unsigned, as the backend is the
+        // enforcement point.
         SignatureParameters params;
         try {
             params = buildSignatureParameters(provider, changes);
+        } catch (RequiredBodyDigestException e) {
+            throw new ApproovException(e.getMessage(), e);
         } catch (RuntimeException e) {
-            throw new ApproovException("Required body digest could not be generated: " + e.getMessage(), e);
+            ApproovLog.e(TAG, "Message signing: failed to build signature parameters, proceeding unsigned: " + e);
+            removeSignatureHeaders(originalHeaders);
+            return originalHeaders;
         }
         if (params == null) {
             removeSignatureHeaders(originalHeaders);
@@ -834,6 +846,14 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             return true;
         }
 
+        /**
+         * Builds the signature parameters for a request.
+         *
+         * @param provider the component provider for the request
+         * @param changes the mutations applied to the request by Approov
+         * @return the signature parameters
+         * @throws RequiredBodyDigestException if a body digest configured as required cannot be generated
+         */
         protected SignatureParameters buildSignatureParameters(VolleyComponentProvider provider,
                 ApproovRequestMutations changes) {
             // the algorithm is left unset so that one signature per configured algorithm is produced over
@@ -863,10 +883,23 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             }
             if (bodyDigestAlgorithm != null) {
                 if (!generateBodyDigest(provider, requestParameters) && bodyDigestRequired) {
-                    throw new IllegalStateException("Failed to create required body digest");
+                    throw new RequiredBodyDigestException("Message signing: required body digest not generated");
                 }
             }
             return requestParameters;
+        }
+    }
+
+    // RequiredBodyDigestException is thrown if a body digest configured as required cannot be generated, which
+    // aborts the request: the request fails with an ApproovException that has it as its cause
+    public static class RequiredBodyDigestException extends IllegalStateException {
+        /**
+         * Constructs an exception due to a required body digest that cannot be generated.
+         *
+         * @param message is the basic information about the exception cause
+         */
+        public RequiredBodyDigestException(String message) {
+            super(message);
         }
     }
 
@@ -883,9 +916,8 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      * (RFC 9421 section 2.2.3);</li>
      * <li>{@code @target-uri} is the request URL as provided to Volley without any fragment, which is never
      * sent, and without an explicit default port (RFC 9421 section 2.2.2);</li>
-     * <li>{@code @query} has no leading {@code ?} and is unavailable when the URL has
-     * no query (RFC 9421 section 2.2.7 includes the {@code ?} and uses {@code ?} alone
-     * for an absent query).</li>
+     * <li>{@code @query} is the query as sent with its leading {@code ?}, or {@code ?} alone when the URL has
+     * no query (RFC 9421 section 2.2.7), as the OkHttp layer builds it.</li>
      * </ul>
      * Any change here must be coordinated with the other service layers and the
      * verifier, otherwise signatures stop validating.
@@ -1073,9 +1105,16 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             return (path == null || path.isEmpty()) ? "/" : path;
         }
 
+        /**
+         * Gets the @query derived component, which is the query as sent with its leading "?", or "?" alone if
+         * there is none.
+         *
+         * @return the query of the request
+         */
         @Override
         public String getQuery() {
-            return url().getQuery();
+            String query = url().getQuery();
+            return (query == null) ? "?" : "?" + query;
         }
 
         @Override
