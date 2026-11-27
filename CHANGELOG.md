@@ -10,8 +10,12 @@ Entries marked **Breaking** need a source change.
 
 ### Changed
 - **Breaking:** The message signing helper classes moved from `io.approov.util.http.sfv` and `io.approov.util.sig` to `io.approov.util.volley.http.sfv` and `io.approov.util.volley.sig`. Update imports of classes such as `SignatureParameters` and `ComponentProvider`.
+- A failed secure string fetch no longer fails the request under the standard mutators. The substitution is skipped and the request proceeds.
+- `NO_APPROOV_SERVICE` proceeds with the trace header, as a failure status does, where 3.5.x sent no Approov headers.
+- A token fetch that is rejected throws `ApproovFetchStatusException`, where 3.5.x threw `ApproovRejectionException`.
 
 ### Added
+- `ApproovServiceMutator.CLOSE_FAILURE`, the default, which keeps the 3.5.x decisions, and `ALWAYS_PROCEED`, which never aborts a request on a token fetch failure.
 - `ApproovService.setLoggingLevel(ApproovLogLevel)`, `INFO` by default. `OFF` silences the layer, and debug logging for the `ApproovService` tag raises any other level to `DEBUG`. The loggable token is logged at `DEBUG` only, with the URL without its query, user info or fragment.
 
 ## [3.5.6] - 2026-10-07

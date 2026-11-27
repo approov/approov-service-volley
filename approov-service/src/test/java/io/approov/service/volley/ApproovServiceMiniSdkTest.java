@@ -220,7 +220,8 @@ public class ApproovServiceMiniSdkTest {
         JSONObject reply = executeRequest(request);
 
         assertNull(getHeader(reply, "Approov-Token"));
-        assertNull(getHeader(reply, "Approov-TraceID"));
+        // NO_APPROOV_SERVICE now proceeds as a failure status, so the trace header is sent
+        assertNotNull(getHeader(reply, "Approov-TraceID"));
     }
 
     @Test
