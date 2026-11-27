@@ -214,6 +214,34 @@ public class Redirect370Test {
     }
 
     @Test
+    public void theAppSeesTheLocationAndTheResponseAsTheServerSentThem() throws Exception {
+        // a redirect that is not followed reaches the app with its Location as sent, holding a placeholder and
+        // an echoed secret that the layer neither looks up nor restores
+        String location = origins.firstUrl("/perm") + "?key=" + PLACEHOLDER + "&echo=" + SECRET;
+        origins.first.enqueue(redirect(308, location));
+        HttpResponse response = origins.send(request(Request.Method.POST, "a=1".getBytes(StandardCharsets.UTF_8)));
+        assertEquals(308, response.getStatusCode());
+        String seen = null;
+        for (com.android.volley.Header header : response.getHeaders()) {
+            if (header.getName().equalsIgnoreCase("Location"))
+                seen = header.getValue();
+        }
+        assertEquals(location, seen);
+
+        // a followed redirect's final response is the target's, with its own header values
+        origins.first.enqueue(redirect(302, origins.firstUrl("/next") + "?echo=" + SECRET));
+        origins.first.enqueue(new MockResponse().setHeader("X-Echo", SECRET).setBody("ok"));
+        HttpResponse followed = origins.send(request(Request.Method.GET, null));
+        assertEquals(200, followed.getStatusCode());
+        String echoed = null;
+        for (com.android.volley.Header header : followed.getHeaders()) {
+            if (header.getName().equalsIgnoreCase("X-Echo"))
+                echoed = header.getValue();
+        }
+        assertEquals(SECRET, echoed);
+    }
+
+    @Test
     public void aRedirectToAnotherSchemeIsNotFollowed() throws Exception {
         origins.shutdown();
         start(false);
