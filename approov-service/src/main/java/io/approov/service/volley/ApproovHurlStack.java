@@ -154,11 +154,12 @@ class ApproovHurlStack extends HurlStack {
                     attempt.verifier = pinningHostnameVerifier;
             }
 
-            // The HostnameVerifier (and therefore the live-pin check) only runs during the TLS
-            // handshake of a NEW connection, never when HttpURLConnection reuses a pooled
-            // keep-alive connection. Request "Connection: close" on every connection, pinned or not,
-            // so each request performs a fresh handshake: a dynamic pin update takes effect on the
-            // very next request, and a pinned request never reuses a connection that was not pinned.
+            // the pins are checked by the HostnameVerifier, which runs only in the TLS handshake of a new
+            // connection, never when HttpURLConnection reuses a pooled keep-alive connection; a pool that is not
+            // keyed by the verifier (the JVM's is not) would let a pinned request reuse a connection that an
+            // opted-out request or an older pin set opened, without a check, so every connection, pinned or not,
+            // asks the server to close it after the response and each request starts with a handshake its own
+            // verifier checks
             httpsConnection.setRequestProperty("Connection", "close");
         }
 
