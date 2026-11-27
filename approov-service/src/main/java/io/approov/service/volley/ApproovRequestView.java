@@ -32,8 +32,8 @@ import okhttp3.HttpUrl;
  * A view of one network attempt of an app's Volley request: the URL, method, body and headers it is sent with.
  * The headers and body are read from the app's request once, so that the message signature and any body digest
  * cover exactly what is sent, even if getHeaders() or getBody() give a new value on every call. The URL is in
- * the form that Android sends (see wireUrl), so that HurlStack opens the connection for the URL that is signed.
- * Everything else,
+ * the form that Android sends (see wireUrl), so that HurlStack opens the connection for the URL that is signed,
+ * and the headers include the Content-Type that HurlStack sends with a body (see sentHeaders). Everything else,
  * such as the retry policy that sets the timeouts, is the app's request's own. A view is never added to a
  * RequestQueue and never parses or delivers a response.
  */
@@ -53,7 +53,36 @@ final class ApproovRequestView extends Request<Object> {
         this.url = url;
         this.method = method;
         this.body = body;
-        this.headers = new LinkedHashMap<>(headers);
+        this.headers = sentHeaders(original, method, body, headers);
+    }
+
+    /**
+     * Gets the headers HurlStack sends for an attempt. For a request it sends with a body (POST, PUT or PATCH
+     * with a body that is not null), HurlStack sets Content-Type to getBodyContentType() unless the headers it is
+     * given already hold one. Android's HttpURLConnection finds that header without regard to the case of its
+     * name, so a Content-Type the app gives, in any case, takes precedence. The headers hold the one Content-Type
+     * that is sent, named "Content-Type" so that HurlStack finds it on any platform, and the message signature
+     * covers the value on the wire. A null body content type is not sent, as HttpURLConnection ignores a header
+     * with a null value.
+     *
+     * @param original is the app's request
+     * @param method is the method of the attempt
+     * @param body is the body of the attempt, or null for none
+     * @param headers are the headers of the attempt
+     * @return the headers sent
+     */
+    private static Map<String, String> sentHeaders(Request<?> original, int method, byte[] body,
+            Map<String, String> headers) {
+        Map<String, String> sent = new LinkedHashMap<>(headers);
+        if (!sendsBody(method) || (body == null))
+            return sent;
+        String contentType = ApproovHurlStack.header(sent, "Content-Type");
+        ApproovHurlStack.removeHeader(sent, "Content-Type");
+        if (contentType == null)
+            contentType = original.getBodyContentType();
+        if (contentType != null)
+            sent.put("Content-Type", contentType);
+        return sent;
     }
 
     /**

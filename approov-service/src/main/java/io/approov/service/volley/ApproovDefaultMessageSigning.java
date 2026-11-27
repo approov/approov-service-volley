@@ -681,7 +681,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                 .setExpiresLifetime(defaultExpiresLifetime)
                 .setAddApproovTokenHeader(true)
                 .setAddApproovTraceIDHeader(true)
-                .addOptionalHeaders("Authorization", "Content-Length", "Content-Type")
+                .addOptionalHeaders("Authorization", "Content-Type")
                 .setBodyDigestConfig(DIGEST_SHA256, false);
     }
 
@@ -1141,13 +1141,23 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             throw new IllegalStateException("Only requests are supported");
         }
 
+        /**
+         * Tells whether the request is sent with a header field that can be covered. The request headers hold the
+         * Content-Type that HurlStack sends with a body, so it is covered as sent. Content-Length is never
+         * covered, as the platform sets it after the request is signed.
+         *
+         * @param name is the field name
+         * @return true if the field is sent and can be covered
+         */
         @Override
         public boolean hasField(String name) {
-            return findHeaderValue(name) != null;
+            return getField(name) != null;
         }
 
         @Override
         public String getField(String name) {
+            if ("Content-Length".equalsIgnoreCase(name))
+                return null;
             return findHeaderValue(name);
         }
 
