@@ -14,11 +14,11 @@ import java.net.URI;
 import java.util.LinkedHashMap;
 
 /**
- * The derived components of a signed request come from the URL string exactly as the stack sends it:
- * {@code @target-uri} is that string without the fragment, which is never sent, and without an explicit
- * default port, and {@code @authority} is the lowercase host with a non-default port. Nothing is re-parsed
- * with {@code java.net.URI}, which re-encodes {@code |} to {@code %7C} and rejects some queries the
- * stack sends.
+ * The derived components of a signed request come from the URL in the form Android sends it, parsed with
+ * OkHttp's HttpUrl: {@code @target-uri} is that URL without the fragment, which is never sent, and without an
+ * explicit default port, and {@code @authority} is the lowercase host with a non-default port. Nothing is
+ * parsed with {@code java.net.URI}, which encodes {@code |} in the query as {@code %7C} and rejects some
+ * queries that Android sends.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(manifest = Config.NONE)
@@ -78,8 +78,8 @@ public class WireUrlComponentProviderTest {
         assertEquals("https://host:8443/p", provider("https://host:8443/p").getTargetUri());
         assertEquals("http://host:443/p", provider("http://host:443/p").getTargetUri());
         assertEquals("https://host:80/p", provider("https://host:80/p").getTargetUri());
-        // the scheme is compared without regard to case
-        assertEquals("HTTPS://host/p", provider("HTTPS://host:443/p").getTargetUri());
+        // the scheme is compared without regard to case, and Android sends it in lowercase
+        assertEquals("https://host/p", provider("HTTPS://host:443/p").getTargetUri());
         // a URL with no path or no query
         assertEquals("https://host/", provider("https://host:443/").getTargetUri());
         assertEquals("https://host/?a=1", provider("https://host:443/?a=1#f").getTargetUri());

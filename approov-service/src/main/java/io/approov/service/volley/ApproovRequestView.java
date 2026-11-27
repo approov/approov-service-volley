@@ -26,10 +26,14 @@ import com.android.volley.RetryPolicy;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import okhttp3.HttpUrl;
+
 /**
  * A view of one network attempt of an app's Volley request: the URL, method, body and headers it is sent with.
  * The headers and body are read from the app's request once, so that the message signature and any body digest
- * cover exactly what is sent, even if getHeaders() or getBody() give a new value on every call. Everything else,
+ * cover exactly what is sent, even if getHeaders() or getBody() give a new value on every call. The URL is in
+ * the form that Android sends (see wireUrl), so that HurlStack opens the connection for the URL that is signed.
+ * Everything else,
  * such as the retry policy that sets the timeouts, is the app's request's own. A view is never added to a
  * RequestQueue and never parses or delivers a response.
  */
@@ -78,7 +82,49 @@ final class ApproovRequestView extends Request<Object> {
             // the stack sends no body for any other method, so none is read, signed or digested
             body = null;
         }
-        return new ApproovRequestView(request, request.getUrl(), method, body, headers);
+        return new ApproovRequestView(request, sentUrl(request.getUrl()), method, body, headers);
+    }
+
+    /**
+     * Gets a URL in the form that Android sends it. Android's HttpURLConnection parses the URL with OkHttp's
+     * HttpUrl and writes the request line from the result, so a character it does not send as written, such as
+     * "|" or a space in the path, or a character that is not ASCII, is percent-encoded, while an existing escape
+     * stays as it is. The scheme and host are in lowercase, and a default port is left out. The fragment is left
+     * out too, as it is never sent. Parsing the result again gives the same URL.
+     *
+     * @param url is the URL as the app wrote it
+     * @return the URL as Android sends it, or null if HttpUrl cannot parse it, which Android would also reject
+     */
+    static String wireUrl(String url) {
+        HttpUrl parsed = parseWireUrl(url);
+        return (parsed != null) ? parsed.toString() : null;
+    }
+
+    /**
+     * Parses a URL as Android does before it sends a request, without the fragment.
+     *
+     * @param url is the URL as the app wrote it
+     * @return the parsed URL without any fragment, or null if HttpUrl cannot parse it
+     */
+    static HttpUrl parseWireUrl(String url) {
+        if (url == null)
+            return null;
+        HttpUrl parsed;
+        try {
+            parsed = HttpUrl.parse(url);
+        } catch (RuntimeException e) {
+            return null;
+        }
+        if ((parsed != null) && (parsed.encodedFragment() != null))
+            parsed = parsed.newBuilder().fragment(null).build();
+        return parsed;
+    }
+
+    // gets the URL an attempt is sent with: the form Android sends, or the URL as written if HttpUrl cannot
+    // parse it, as the request is then sent as written and unsigned
+    private static String sentUrl(String url) {
+        String wire = wireUrl(url);
+        return (wire != null) ? wire : url;
     }
 
     /**
@@ -103,7 +149,7 @@ final class ApproovRequestView extends Request<Object> {
     }
 
     /**
-     * Gets a view of another attempt of the same app request.
+     * Gets a view of another attempt of the same app request, with the URL in the form Android sends.
      *
      * @param newUrl is the URL of the attempt
      * @param newMethod is the method of the attempt
@@ -112,7 +158,7 @@ final class ApproovRequestView extends Request<Object> {
      * @return the new view
      */
     ApproovRequestView attempt(String newUrl, int newMethod, byte[] newBody, Map<String, String> newHeaders) {
-        return new ApproovRequestView(original, newUrl, newMethod, newBody, newHeaders);
+        return new ApproovRequestView(original, sentUrl(newUrl), newMethod, newBody, newHeaders);
     }
 
     /**

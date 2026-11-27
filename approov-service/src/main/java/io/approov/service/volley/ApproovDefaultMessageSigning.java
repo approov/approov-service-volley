@@ -26,8 +26,6 @@ import com.criticalblue.approovsdk.Approov;
 
 import io.approov.util.volley.tink.subtle.EllipticCurves;
 
-import java.net.MalformedURLException;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -48,6 +46,8 @@ import io.approov.util.volley.http.sfv.ListElement;
 import io.approov.util.volley.sig.ComponentProvider;
 import io.approov.util.volley.sig.SignatureBaseBuilder;
 import io.approov.util.volley.sig.SignatureParameters;
+
+import okhttp3.HttpUrl;
 
 /**
  * Provides a base implementation of HTTP message signing for Volley requests.
@@ -99,11 +99,16 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     private static final AtomicBoolean accountMissingLogged = new AtomicBoolean();
     private static final AtomicBoolean unsignedLogged = new AtomicBoolean();
 
+    // true once a request left unsigned because its URL cannot be parsed has been logged as an error, after
+    // which such a request is logged at debug level
+    private static final AtomicBoolean unparsedUrlLogged = new AtomicBoolean();
+
     // clears the once per process flags of the missing signature logs
     static void resetMissingSignatureLogsForTesting() {
         installMissingLogged.set(false);
         accountMissingLogged.set(false);
         unsignedLogged.set(false);
+        unparsedUrlLogged.set(false);
     }
 
     // the mutator whose decisions the signer makes, or null for the interface default decisions
@@ -422,6 +427,18 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         }
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
         boolean hadContentDigest = provider.hasField("Content-Digest");
+
+        // Fail-open: a URL that HttpUrl cannot parse is sent as written, which Android would also reject, so no
+        // signature over the URL Android sends can be made
+        if (!provider.hasWireUrl()) {
+            String line = "Message signing: request URL cannot be parsed, proceeding unsigned";
+            if (unparsedUrlLogged.compareAndSet(false, true))
+                ApproovLog.e(TAG, line);
+            else
+                ApproovLog.d(TAG, line);
+            removeSignatureHeaders(originalHeaders);
+            return originalHeaders;
+        }
 
         // Message signing is fail-open. Only two conditions fail closed and abort the request: (1) a body
         // digest configured as required that cannot be generated, and (2) an unsupported signing algorithm.
@@ -919,17 +936,19 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     }
 
     /**
-     * ComponentProvider implementation for Volley requests, deriving every component from the request URL
-     * string exactly as the stack sends it, and never parsing it with java.net.URI, which encodes some
-     * characters differently and rejects some URLs the stack sends. The URL is read with java.net.URL, as
-     * the stack does.
+     * ComponentProvider implementation for Volley requests, deriving every component from the request URL in
+     * the form that Android sends it. Android's HttpURLConnection parses the URL with OkHttp's HttpUrl before it
+     * writes the request line, so the URL is parsed with HttpUrl here too, and the stack opens the connection
+     * for the same form. A character that Android percent-encodes is signed percent-encoded, and an existing
+     * escape is kept. The URL is never parsed with java.net.URI, which encodes some characters differently and
+     * rejects some URLs that Android sends.
      * <p>
      * Some derived components deliberately deviate from a strict reading of RFC 9421 so that all Approov
      * service layers produce identical signature bases for the Approov verifier:
      * <ul>
      * <li>{@code @authority} is the lowercase host and a non-default port; a default port is left out
      * (RFC 9421 section 2.2.3);</li>
-     * <li>{@code @target-uri} is the request URL as provided to Volley without any fragment, which is never
+     * <li>{@code @target-uri} is the request URL as Android sends it, without any fragment, which is never
      * sent, and without an explicit default port (RFC 9421 section 2.2.2);</li>
      * <li>{@code @query} is the query as sent with its leading {@code ?}, or {@code ?} alone when the URL has
      * no query (RFC 9421 section 2.2.7), as the OkHttp layer builds it.</li>
@@ -939,15 +958,14 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      */
     protected static final class VolleyComponentProvider implements ComponentProvider {
         private final Request<?> request;
-        private final String urlString;
         private final Map<String, String> headers;
-        // the parsed URL, read when a component needs it so that a URL that cannot be parsed only fails
-        // the components that use it
-        private URL parsedUrl;
+        // the URL as Android sends it without any fragment, or null if it cannot be parsed, in which case only
+        // the components that use it fail
+        private final HttpUrl wireUrl;
 
         VolleyComponentProvider(Request<?> request, Map<String, String> headers) {
             this.request = request;
-            this.urlString = request.getUrl();
+            this.wireUrl = ApproovRequestView.parseWireUrl(request.getUrl());
             this.headers = new LinkedHashMap<>();
             try {
                 Map<String, String> requestHeaders = request.getHeaders();
@@ -962,26 +980,32 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             }
         }
 
-        // gets the request URL as the stack reads it
-        private URL url() {
-            if (parsedUrl == null) {
-                try {
-                    parsedUrl = new URL(urlString);
-                } catch (MalformedURLException e) {
-                    throw new IllegalArgumentException("Request URL cannot be read: " + e.getMessage(), e);
-                }
-            }
-            return parsedUrl;
+        // gets the request URL as Android sends it
+        private HttpUrl url() {
+            if (wireUrl == null)
+                throw new IllegalArgumentException("Request URL cannot be parsed");
+            return wireUrl;
+        }
+
+        /**
+         * Tells whether the request URL can be parsed, so that the components that use it can be given.
+         *
+         * @return true if the URL can be parsed, false if the request cannot be signed
+         */
+        boolean hasWireUrl() {
+            return wireUrl != null;
         }
 
         /**
          * Gets the host of the request without any port, in lowercase, which is used to select a host
-         * factory. An IPv6 address keeps its brackets.
+         * factory. An IPv6 address keeps its brackets, and an internationalized domain name is in its ASCII
+         * form, as Android sends it.
          *
          * @return the host of the request
          */
         String getHost() {
-            return url().getHost().toLowerCase(Locale.ROOT);
+            String host = url().host();
+            return (host.indexOf(':') >= 0) ? "[" + host + "]" : host;
         }
 
         public Map<String, String> getHeaders() {
@@ -1053,71 +1077,40 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
          */
         @Override
         public String getAuthority() {
-            URL url = url();
+            HttpUrl url = url();
             String authority = getHost();
-            if (url.getPort() != -1 && url.getPort() != url.getDefaultPort())
-                authority += ":" + url.getPort();
+            if (url.port() != HttpUrl.defaultPort(url.scheme()))
+                authority += ":" + url.port();
             return authority;
         }
 
         @Override
         public String getScheme() {
-            return url().getProtocol();
+            return url().scheme();
         }
 
         /**
-         * Gets the @target-uri derived component, which is the request URL as the stack sends it, leaving
-         * out any fragment as that is never sent, and any explicit default port (":443" for https and ":80"
-         * for http, the scheme being compared without regard to case). Nothing else changes, so the path,
-         * the query and their percent-encoding are as the app wrote them. An absent path is the root path,
-         * as the stack sends it.
+         * Gets the @target-uri derived component, which is the request URL as Android sends it, leaving out any
+         * fragment as that is never sent. The scheme and host are in lowercase, a default port is left out,
+         * an absent path is the root path, and a character that Android percent-encodes is percent-encoded.
          *
          * @return the target URI of the request
          */
         @Override
         public String getTargetUri() {
-            URL url = url();
-            String text = urlString;
-            int fragment = text.indexOf('#');
-            if (fragment >= 0)
-                text = text.substring(0, fragment);
-
-            // the authority runs from after "://" to the first of "/", "?" or the end of the text
-            int authorityStart = text.indexOf("://") + 3;
-            int authorityEnd = text.length();
-            for (int i = authorityStart; i < text.length(); i++) {
-                char c = text.charAt(i);
-                if (c == '/' || c == '?') {
-                    authorityEnd = i;
-                    break;
-                }
-            }
-            String authority = text.substring(authorityStart, authorityEnd);
-            // an explicit port follows the last colon after any user info and any IPv6 address in brackets
-            int portColon = authority.lastIndexOf(':');
-            if (portColon > authority.lastIndexOf(']') && portColon > authority.lastIndexOf('@')
-                    && url.getPort() == url.getDefaultPort() && url.getPort() != -1)
-                authority = authority.substring(0, portColon);
-            String rest = text.substring(authorityEnd);
-            if (rest.isEmpty() || rest.charAt(0) == '?')
-                rest = "/" + rest;
-            return text.substring(0, authorityStart) + authority + rest;
+            return url().toString();
         }
 
         @Override
         public String getRequestTarget() {
-            String requestTarget = getPath();
-            String query = url().getQuery();
-            if (query != null) {
-                requestTarget += "?" + query;
-            }
-            return requestTarget;
+            HttpUrl url = url();
+            String query = url.encodedQuery();
+            return (query == null) ? url.encodedPath() : url.encodedPath() + "?" + query;
         }
 
         @Override
         public String getPath() {
-            String path = url().getPath();
-            return (path == null || path.isEmpty()) ? "/" : path;
+            return url().encodedPath();
         }
 
         /**
@@ -1128,13 +1121,13 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
          */
         @Override
         public String getQuery() {
-            String query = url().getQuery();
+            String query = url().encodedQuery();
             return (query == null) ? "?" : "?" + query;
         }
 
         @Override
         public String getQueryParam(String name) {
-            List<String> values = Uri.parse(urlString).getQueryParameters(name);
+            List<String> values = Uri.parse(getTargetUri()).getQueryParameters(name);
             if (values.isEmpty()) {
                 throw new IllegalArgumentException("Could not find query parameter named " + name);
             } else if (values.size() > 1) {

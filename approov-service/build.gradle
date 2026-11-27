@@ -106,10 +106,11 @@ dependencies {
     // The closed-source Approov SDK (io.approov:approov-android-sdk:3.7.0) uses okhttp3 internally
     // (okhttp3.Request/Call/CertificatePinner/EventListener). It does not bundle or declare okhttp,
     // so the service layer must supply it transitively at runtime, otherwise Approov.initialize()
-    // fails with NoClassDefFoundError: okhttp3.EventListener. The service layer's OWN code no longer
-    // references okhttp (pin hashing moved to the platform MessageDigest/Base64), hence runtimeOnly
-    // rather than implementation: it is shipped/declared for the SDK but kept off the compile classpath.
-    runtimeOnly 'com.squareup.okhttp3:okhttp:4.12.0'
+    // fails with NoClassDefFoundError: okhttp3.EventListener. The service layer's own code uses only
+    // okhttp3.HttpUrl, to put each request URL in the form that Android's HttpURLConnection sends,
+    // so that the message signature covers that URL. It never sends a request with OkHttp. The
+    // published POM keeps okhttp in runtime scope, as Gradle publishes an implementation dependency.
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-inline:5.2.0'
     // Test-only compile dependency: the message-signing unit tests (SignatureBaseBuilderTest,
@@ -218,7 +219,8 @@ tasks.register('verifyPublishedPom') {
     doLast {
         def dependencies = new groovy.xml.XmlSlurper().parse(pomFile.asFile).dependencies.dependency
         def artifacts = dependencies.collect { it.groupId.text() + ":" + it.artifactId.text() } as Set
-        // okhttp is needed at runtime by the Approov SDK, which uses it but does not declare it
+        // okhttp is needed at runtime by the Approov SDK, which uses it but does not declare it, and by the
+        // URL parsing of this layer
         ['com.squareup.okhttp3:okhttp', 'io.approov:approov-android-sdk', 'com.android.volley:volley'].each {
             assert artifacts.contains(it): "published POM is missing runtime dependency ${it}"
         }

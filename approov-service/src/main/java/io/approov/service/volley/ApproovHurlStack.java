@@ -699,8 +699,8 @@ class ApproovHurlStack extends HurlStack {
 
     /**
      * Determines if a secure string substituted as a query parameter value reaches the backend unchanged.
-     * HttpURLConnection sends the URL as it is given, so the value must be printable ASCII with no space, and
-     * neither "&" nor "#", which change the structure of the URL.
+     * The value is put in the URL as it is, so it must be printable ASCII with no space, and neither "&" nor
+     * "#", which change the structure of the URL.
      *
      * @param value is the secure string
      * @return true if the URL carries the value unchanged, false otherwise
@@ -1053,7 +1053,8 @@ class ApproovHurlStack extends HurlStack {
          * Gets the attempt that follows a response, if it is a redirect HttpURLConnection follows: 300 to 303
          * for any method, a method that permits a body becoming GET without one, and 307 and 308 for GET and HEAD,
          * to a URL with the same scheme, while HttpURLConnection.getFollowRedirects() is true. The target URL is
-         * taken from the Location header as the server sent it, resolved against the attempt URL. The app's own
+         * taken from the Location header as the server sent it, resolved against the attempt URL, in the form
+         * Android sends it. The app's own
          * headers and the cache headers go on as the platform sends them: without Authorization on a change of
          * host or port, and without the body headers when the body is dropped.
          *
@@ -1112,9 +1113,9 @@ class ApproovHurlStack extends HurlStack {
             }
             if (!sameConnection(current, target))
                 removeHeader(nextHeaders, "Authorization");
-            String nextUrl = target.toString();
-            return new Attempt(view.attempt(nextUrl, nextMethod, nextBody, nextHeaders), nextUrl, nextHeaders,
-                    cacheHeaders, null);
+            // the hop is classified, protected, signed and sent with its URL in the form Android sends
+            ApproovRequestView next = view.attempt(target.toString(), nextMethod, nextBody, nextHeaders);
+            return new Attempt(next, next.getUrl(), nextHeaders, cacheHeaders, null);
         }
     }
 }

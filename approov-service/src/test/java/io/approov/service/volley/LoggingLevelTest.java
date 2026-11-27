@@ -131,7 +131,9 @@ public class LoggingLevelTest {
             String url = "https://" + USER + ":pw@api.example.com:8443/v1/items?q=" + QUERY_VALUE + "#frag";
             Approov.TokenFetchResult success = ApproovTestSupport.tokenResult(
                     Approov.TokenFetchStatus.SUCCESS, "jwt-token", "", "", false);
-            approov.when(() -> Approov.fetchApproovTokenAndWait(url)).thenReturn(success);
+            // the token is fetched for the URL as it is sent, which has no fragment
+            String sent = url.substring(0, url.indexOf('#'));
+            approov.when(() -> Approov.fetchApproovTokenAndWait(sent)).thenReturn(success);
             ShadowLog.reset();
             if (debugTag)
                 ShadowLog.setLoggable("ApproovService", Log.DEBUG);
