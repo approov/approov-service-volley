@@ -21,6 +21,7 @@ Entries marked **Breaking** need a source change.
 - `setApproovHeader` and `setApproovTraceIDHeader`. Use `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 
 ### Added
+- `ApproovService.getServerAdjustedCurrentTimeMS()`, the current time corrected to the Approov servers' clock. Message signatures take their `created` and `expires` times from it. If the server time is not available the device clock is used and a warning is logged.
 - The names shared by all Approov packages: `isApproovServiceEnabled()`, `isApproovProtectionEnabled()`, `setInstallAttributes(String)`, `getTokenHeader()`, `getTokenPrefix()`, `getTraceIDHeader()`, `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 - `ApproovServiceMutator.CLOSE_FAILURE`, the default, which keeps the 3.5.x decisions, and `ALWAYS_PROCEED`, which never aborts a request on a token fetch failure.
 - `ApproovService.setLoggingLevel(ApproovLogLevel)`, `INFO` by default. `OFF` silences the layer, and debug logging for the `ApproovService` tag raises any other level to `DEBUG`. The loggable token is logged at `DEBUG` only, with the URL without its query, user info or fragment.
