@@ -32,6 +32,8 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -133,7 +135,7 @@ class ApproovHurlStack extends HurlStack {
 
         // protect the request for its URL and send it
         Attempt attempt = Attempt.first(request, cacheHeaders);
-        Attempt sent = protect(attempt, mutator);
+        Attempt sent = protect(attempt, mutator, true);
         return executeNetworkRequest(sent.view, sent.wireHeaders);
     }
 
@@ -163,12 +165,22 @@ class ApproovHurlStack extends HurlStack {
      * a failure status the service mutator lets proceed the token header with an empty token or the status and
      * any trace header. An attempt that is not protected is returned with its own headers only.
      *
-     * @param attempt is the attempt, carrying the app's own headers
+     * <p>
+     * Secure strings are substituted only on a protected channel, a token-protected or secrets-only API over
+     * TLS, so that a request to any other URL carrying a placeholder never receives the secret. A secure string
+     * fetch that fails while the request continues puts its status in place of the placeholder, as evidence for
+     * the backend, and every placeholder not given a secure string is logged by name, never by value. The query
+     * of a redirect target is the server's, so its values are never looked up as secure string keys.
+     *
+     * @param attempt is the attempt, carrying the app's own headers with their placeholders
      * @param mutator is the service mutator to consult
+     * @param appQuery is true if the query of the attempt URL is the app's own, false if it is a redirect
+     * target the server sent
      * @return the attempt to send, with its wire headers
      * @throws ApproovException if the request is to be aborted
      */
-    private Attempt protect(Attempt attempt, ApproovServiceMutator mutator) throws ApproovException {
+    private Attempt protect(Attempt attempt, ApproovServiceMutator mutator, boolean appQuery)
+            throws ApproovException {
         String url = attempt.url;
         Approov.TokenFetchResult approovResults = fetchToken(attempt);
 
@@ -187,6 +199,8 @@ class ApproovHurlStack extends HurlStack {
         boolean secretsOnly = (tokenStatus == Approov.TokenFetchStatus.UNPROTECTED_URL);
         boolean failure = !tokenProtected && !secretsOnly && (tokenStatus != Approov.TokenFetchStatus.UNKNOWN_URL);
         String host = ApproovService.loggableHost(url);
+        String undelivered = undeliveredReason(url, approovResults);
+        boolean undeliveredWarns = isConfigurationReason(url, tokenStatus);
         if (failure && !ApproovService.isApproovApiHost(attempt.host())) {
             // a failure status says nothing about the host, so a host that is not an Approov API domain is
             // treated like UNKNOWN_URL and the request is sent untouched; the hook is still consulted so that
@@ -198,18 +212,22 @@ class ApproovHurlStack extends HurlStack {
                         + ", not an Approov API domain");
             ApproovLog.d(TAG, "Approov token fetch for " + host + ": " + ApproovService.describeStatus(approovResults)
                     + ", not an Approov API domain, proceeding untouched");
+            logUndeliveredPlaceholders(attempt, undelivered, undeliveredWarns, appQuery);
             return attempt.untouched();
         }
         boolean proceedWithHeaders = ApproovService.callMutator("handleRequestFetchTokenResult",
                 () -> mutator.handleRequestFetchTokenResult(tokenResults, url));
         if (tokenStatus == Approov.TokenFetchStatus.UNKNOWN_URL) {
-            // a host not added to Approov has nothing added, whatever the mutator decided
+            // a host not added to Approov has nothing added or substituted, whatever the mutator decided
+            logUndeliveredPlaceholders(attempt, undelivered, undeliveredWarns, appQuery);
             return attempt.untouched();
         }
         if (failure && !proceedWithHeaders) {
-            // the mutator decided to send the request untouched on a failure status
+            // the mutator decided to send the request untouched on a failure status, so it also carries no
+            // secure strings
             ApproovLog.d(TAG, "Approov token fetch for " + host + ": " + ApproovService.describeStatus(approovResults)
                     + ", proceeding with no Approov header");
+            logUndeliveredPlaceholders(attempt, undelivered, undeliveredWarns, appQuery);
             return attempt.untouched();
         }
         if (failure)
@@ -251,13 +269,126 @@ class ApproovHurlStack extends HurlStack {
             }
         }
 
+        // we now deal with any header substitutions, which may require further fetches but these should be
+        // using cached results; the app's own headers keep their placeholders, so that the substitution can be
+        // made afresh for another attempt
+        Map<String, String> appHeaders = new LinkedHashMap<>(attempt.appHeaders);
+        List<String> secureStringHeaders = new ArrayList<>();
+        for (Map.Entry<String, String> entry : ApproovService.getSubstitutionHeaders().entrySet()) {
+            String header = entry.getKey();
+            String prefix = entry.getValue();
+            String value = header(appHeaders, header);
+            if ((value != null) && value.startsWith(prefix) && (value.length() > prefix.length())) {
+                // the placeholder is left if the request may not receive secure strings
+                if (undelivered != null) {
+                    logPlaceholderLeft(undeliveredWarns, "Secure string not substituted in header " + header
+                            + ": " + undelivered + ", placeholder left");
+                    continue;
+                }
+                String key = value.substring(prefix.length());
+                Approov.TokenFetchResult headerResults = fetchForRequest("fetchSecureStringAndWait",
+                        () -> Approov.fetchSecureStringAndWait(key, null));
+                ApproovLog.d(TAG, "Substituting header: " + header + ", " + headerResults.getStatus());
+                // the request proceeds unless the mutator throws, and a decision to substitute with no value is
+                // treated like a decision not to substitute, so the header never carries "null"
+                boolean substitute = ApproovService.callMutator("handleRequestHeaderSubstitutionResult",
+                        () -> mutator.handleRequestHeaderSubstitutionResult(headerResults, header));
+                String secureString = headerResults.getSecureString();
+                String failureStatus = failureStatusValue(headerResults);
+                if (substitute && (secureString != null)) {
+                    if (!ApproovService.isSafeHeaderValue(secureString)) {
+                        // a value a header cannot carry leaves the placeholder and is never logged
+                        ApproovLog.w(TAG, "Secure string not substituted in header " + header
+                                + ": invalid character in value, placeholder left");
+                    } else {
+                        replaceHeaderValue(appHeaders, header, prefix + secureString);
+                        secureStringHeaders.add(header);
+                    }
+                } else if (failureStatus != null) {
+                    // the failure status replaces the placeholder, after any required prefix
+                    ApproovLog.d(TAG, "Secure string not substituted in header " + header
+                            + ": secure string fetch status " + ApproovService.describeStatus(headerResults)
+                            + ", status sent in its place");
+                    replaceHeaderValue(appHeaders, header, prefix + failureStatus);
+                } else {
+                    ApproovLog.d(TAG, "Secure string not substituted in header " + header + ": "
+                            + placeholderLeftReason(substitute, headerResults) + ", placeholder left");
+                }
+            }
+        }
+
+        // we now deal with any query parameter substitutions; the query of a redirect target is the server's, so
+        // none of its values is looked up or replaced, whatever its parameter names
+        String replacementURL = url;
+        List<String> queryKeys = new ArrayList<>();
+        Map<String, Pattern> substitutionQueryParams = appQuery ? ApproovService.getSubstitutionQueryParams()
+                : Collections.<String, Pattern>emptyMap();
+        for (Map.Entry<String, Pattern> entry : substitutionQueryParams.entrySet()) {
+            String queryKey = entry.getKey();
+            Pattern pattern = entry.getValue();
+            // every occurrence of the parameter in the query is substituted, each value looked up as its own
+            // key, and the search is confined to the query after the first '?' and before any '#'
+            int from = replacementURL.indexOf('?');
+            while (from >= 0) {
+                int hash = replacementURL.indexOf('#', from);
+                Matcher matcher = pattern.matcher(replacementURL);
+                matcher.region(from, (hash < 0) ? replacementURL.length() : hash);
+                if (!matcher.find())
+                    break;
+                if (undelivered != null) {
+                    logPlaceholderLeft(undeliveredWarns, "Secure string not substituted in query parameter "
+                            + queryKey + ": " + undelivered + ", placeholder left");
+                    break;
+                }
+                int start = matcher.start(1);
+                from = matcher.end(1);
+                String queryValue = matcher.group(1);
+                Approov.TokenFetchResult queryResults = fetchForRequest("fetchSecureStringAndWait",
+                        () -> Approov.fetchSecureStringAndWait(queryValue, null));
+                ApproovLog.d(TAG, "Substituting query parameter: " + queryKey + ", " + queryResults.getStatus());
+                boolean substitute = ApproovService.callMutator("handleRequestQueryParamSubstitutionResult",
+                        () -> mutator.handleRequestQueryParamSubstitutionResult(queryResults, queryKey));
+                String secureString = queryResults.getSecureString();
+                String failureStatus = failureStatusValue(queryResults);
+                if (substitute && (secureString != null)) {
+                    if (isCarriedInQuery(secureString)) {
+                        if (!queryKeys.contains(queryKey))
+                            queryKeys.add(queryKey);
+                        replacementURL = new StringBuilder(replacementURL).replace(start, from, secureString)
+                                .toString();
+                        from = start + secureString.length();
+                    } else {
+                        // a value the URL cannot carry unchanged leaves the placeholder and is never logged
+                        ApproovLog.w(TAG, "Secure string not substituted in query parameter " + queryKey
+                                + ": value cannot be carried in the URL, placeholder left");
+                    }
+                } else if (failureStatus != null) {
+                    // the failure status replaces this occurrence of the placeholder
+                    ApproovLog.d(TAG, "Secure string not substituted in query parameter " + queryKey
+                            + ": secure string fetch status " + ApproovService.describeStatus(queryResults)
+                            + ", status sent in its place");
+                    replacementURL = new StringBuilder(replacementURL).replace(start, from, failureStatus)
+                            .toString();
+                    from = start + failureStatus.length();
+                } else {
+                    ApproovLog.d(TAG, "Secure string not substituted in query parameter " + queryKey + ": "
+                            + placeholderLeftReason(substitute, queryResults) + ", placeholder left");
+                }
+            }
+        }
+
+        // the mutations list only the headers and query parameters given a secure string, never a status
+        if (!secureStringHeaders.isEmpty())
+            changes.setSubstitutionHeaderKeys(secureStringHeaders);
+        if (!replacementURL.equals(url) && !queryKeys.isEmpty())
+            changes.setSubstitutionQueryParamResults(url, queryKeys);
+
         // the app's headers as sent, without any the layer sets itself, so that the processed headers hook and
         // any message signature see exactly what is sent
-        Map<String, String> appHeaders = new LinkedHashMap<>(attempt.appHeaders);
         for (String name : approovHeaders.keySet())
             removeHeader(appHeaders, name);
-        ApproovRequestView view = attempt.view.attempt(url, attempt.view.getMethod(), attempt.view.getBody(),
-                appHeaders);
+        ApproovRequestView view = attempt.view.attempt(replacementURL, attempt.view.getMethod(),
+                attempt.view.getBody(), appHeaders);
 
         // call the processed headers callback, which also signs the request when message signing is installed
         Map<String, String> headers = new LinkedHashMap<>(attempt.cacheHeaders);
@@ -286,6 +417,139 @@ class ApproovHurlStack extends HurlStack {
         putAllHeaders(wireHeaders, appHeaders);
         putAllHeaders(wireHeaders, processed);
         return attempt.sent(view, wireHeaders);
+    }
+
+    /**
+     * Gets the value written in place of a placeholder whose secure string fetch failed while the request
+     * continues, which is the status name, such as "REJECTED". SUCCESS has none, as it substitutes the
+     * secure string. UNKNOWN_KEY has none either: the value is not a secure string key, so it is left as
+     * the app wrote it.
+     *
+     * @param approovResults is the secure string fetch result
+     * @return the status to write in place of the placeholder, or null for SUCCESS and UNKNOWN_KEY
+     */
+    static String failureStatusValue(Approov.TokenFetchResult approovResults) {
+        Approov.TokenFetchStatus status = approovResults.getStatus();
+        if ((status == Approov.TokenFetchStatus.SUCCESS) || (status == Approov.TokenFetchStatus.UNKNOWN_KEY))
+            return null;
+        return ApproovService.statusName(approovResults);
+    }
+
+    /**
+     * Describes why a secure string fetch leaves the placeholder: the value is not a secure string key
+     * (UNKNOWN_KEY), the mutator declined a SUCCESS, or it accepted it but the SDK gave no secure string.
+     *
+     * @param substitute is the decision of the substitution hook
+     * @param approovResults is the secure string fetch result
+     * @return the reason for the log line
+     */
+    static String placeholderLeftReason(boolean substitute, Approov.TokenFetchResult approovResults) {
+        if (approovResults.getStatus() == Approov.TokenFetchStatus.UNKNOWN_KEY)
+            return "value is not a secure string key";
+        if (substitute)
+            return "no secure string for " + approovResults.getStatus();
+        return "secure string fetch status " + ApproovService.describeStatus(approovResults);
+    }
+
+    /**
+     * Determines why a request whose token fetch returned the given result receives no secure strings,
+     * since they are only sent to a token-protected (SUCCESS) or secrets-only (UNPROTECTED_URL) API over
+     * TLS.
+     *
+     * @param url is the request URL
+     * @param approovResults is the token fetch result
+     * @return the reason including the fetch outcome, or null if secure strings may be substituted
+     */
+    static String undeliveredReason(String url, Approov.TokenFetchResult approovResults) {
+        Approov.TokenFetchStatus status = approovResults.getStatus();
+        if (!isHttps(url))
+            return "request is not https";
+        if ((status == Approov.TokenFetchStatus.SUCCESS) || (status == Approov.TokenFetchStatus.UNPROTECTED_URL))
+            return null;
+        return "token fetch status " + ApproovService.describeStatus(approovResults);
+    }
+
+    /**
+     * Determines if a placeholder left for a request is due to a configuration problem that is worth a
+     * warning, as the request is not https or the SDK reports its URL as BAD_URL. Any other undelivered
+     * secure string is logged at debug level only.
+     *
+     * @param url is the request URL
+     * @param status is the token fetch status
+     * @return true if the reason is a configuration problem, false otherwise
+     */
+    static boolean isConfigurationReason(String url, Approov.TokenFetchStatus status) {
+        return !isHttps(url) || (status == Approov.TokenFetchStatus.BAD_URL);
+    }
+
+    // determines if a URL is https, comparing the scheme without regard to case
+    static boolean isHttps(String url) {
+        return (url != null) && url.regionMatches(true, 0, "https:", 0, 6);
+    }
+
+    /**
+     * Determines if a secure string substituted as a query parameter value reaches the backend unchanged.
+     * HttpURLConnection sends the URL as it is given, so the value must be printable ASCII with no space, and
+     * neither "&" nor "#", which change the structure of the URL.
+     *
+     * @param value is the secure string
+     * @return true if the URL carries the value unchanged, false otherwise
+     */
+    static boolean isCarriedInQuery(String value) {
+        if (value.isEmpty())
+            return false;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if ((c <= 0x20) || (c > 0x7e) || (c == '&') || (c == '#'))
+                return false;
+        }
+        return true;
+    }
+
+    // logs a placeholder left in place, as a warning or at debug level
+    static void logPlaceholderLeft(boolean warn, String message) {
+        if (warn)
+            ApproovLog.w(TAG, message);
+        else
+            ApproovLog.d(TAG, message);
+    }
+
+    /**
+     * Logs by name each substitution header and query parameter an attempt carries that is left unchanged
+     * because the request may not receive secure strings, as a warning for a configuration problem or at
+     * debug level otherwise. A value is never logged.
+     *
+     * @param attempt is the attempt carrying any placeholders
+     * @param reason is why no secure string is delivered, or null if they are
+     * @param warn is true if the reason is a configuration problem
+     * @param appQuery is true if the query of the attempt URL is the app's own, false if it is a redirect
+     * target the server sent, whose query parameters are not placeholders
+     */
+    private static void logUndeliveredPlaceholders(Attempt attempt, String reason, boolean warn, boolean appQuery) {
+        if ((reason == null) || !ApproovLog.isEnabled(warn ? ApproovLogLevel.WARNING : ApproovLogLevel.DEBUG))
+            return;
+
+        // log the substitution headers carrying a placeholder
+        for (Map.Entry<String, String> entry : ApproovService.getSubstitutionHeaders().entrySet()) {
+            String value = header(attempt.appHeaders, entry.getKey());
+            if ((value != null) && value.startsWith(entry.getValue()) && (value.length() > entry.getValue().length()))
+                logPlaceholderLeft(warn, "Secure string not substituted in header " + entry.getKey() + ": " + reason
+                        + ", placeholder left");
+        }
+
+        // log the substitution query parameters found in the app's query, after the first '?' and before any '#'
+        String url = attempt.url;
+        int from = url.indexOf('?');
+        if (!appQuery || (from < 0))
+            return;
+        int hash = url.indexOf('#', from);
+        for (Map.Entry<String, Pattern> entry : ApproovService.getSubstitutionQueryParams().entrySet()) {
+            Matcher matcher = entry.getValue().matcher(url);
+            matcher.region(from, (hash < 0) ? url.length() : hash);
+            if (matcher.find())
+                logPlaceholderLeft(warn, "Secure string not substituted in query parameter " + entry.getKey() + ": "
+                        + reason + ", placeholder left");
+        }
     }
 
     /**
@@ -352,6 +616,23 @@ class ApproovHurlStack extends HurlStack {
                 return entry.getValue();
         }
         return null;
+    }
+
+    /**
+     * Replaces the value of a header, found without regard to the case of its name, keeping the name as it is.
+     *
+     * @param headers are the headers
+     * @param name is the header name
+     * @param value is the new value
+     */
+    static void replaceHeaderValue(Map<String, String> headers, String name, String value) {
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            if (name.equalsIgnoreCase(entry.getKey())) {
+                entry.setValue(value);
+                return;
+            }
+        }
+        headers.put(name, value);
     }
 
     /**

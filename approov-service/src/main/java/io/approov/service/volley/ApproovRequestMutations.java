@@ -26,6 +26,9 @@ public class ApproovRequestMutations {
     private String tokenHeaderKey;
     private String tokenHeaderPrefix;
     private String traceIDHeaderKey;
+    private List<String> substitutionHeaderKeys;
+    private String originalURL;
+    private List<String> substitutionQueryParamKeys;
     private List<String> addedHeaderKeys;
 
     /**
@@ -80,6 +83,55 @@ public class ApproovRequestMutations {
      */
     public void setTraceIDHeaderKey(String traceIDHeaderKey) {
         this.traceIDHeaderKey = traceIDHeaderKey;
+    }
+
+    /**
+     * Gets the headers whose value was replaced by a secure string. A header whose secure string could not be
+     * fetched, and which carries the fetch status instead, is not listed.
+     *
+     * @return the substituted header names, or null if none
+     */
+    public List<String> getSubstitutionHeaderKeys() {
+        return substitutionHeaderKeys;
+    }
+
+    /**
+     * Sets the headers whose value was replaced by a secure string.
+     *
+     * @param substitutionHeaderKeys the substituted header names
+     */
+    public void setSubstitutionHeaderKeys(List<String> substitutionHeaderKeys) {
+        this.substitutionHeaderKeys = substitutionHeaderKeys;
+    }
+
+    /**
+     * Gets the request URL before any query parameter substitution.
+     *
+     * @return the URL before substitution, or null if no query parameter was changed
+     */
+    public String getOriginalURL() {
+        return originalURL;
+    }
+
+    /**
+     * Gets the query parameters whose value was replaced by a secure string. A parameter whose secure string
+     * could not be fetched, and which carries the fetch status instead, is not listed.
+     *
+     * @return the substituted query parameter keys, or null if none
+     */
+    public List<String> getSubstitutionQueryParamKeys() {
+        return substitutionQueryParamKeys;
+    }
+
+    /**
+     * Sets the URL before any query parameter substitution and the query parameters given a secure string.
+     *
+     * @param originalURL the URL before substitution
+     * @param substitutionQueryParamKeys the substituted query parameter keys
+     */
+    public void setSubstitutionQueryParamResults(String originalURL, List<String> substitutionQueryParamKeys) {
+        this.originalURL = originalURL;
+        this.substitutionQueryParamKeys = substitutionQueryParamKeys;
     }
 
     /**

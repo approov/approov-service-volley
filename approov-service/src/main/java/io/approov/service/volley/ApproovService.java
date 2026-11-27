@@ -104,6 +104,12 @@ public class ApproovService {
     // set of URL regexs that should be excluded from any Approov protection, mapped to the compiled Pattern
     private static Map<String, Pattern> exclusionURLRegexs = null;
 
+    // the headers subject to secure string substitution, mapped to their required prefix
+    private static Map<String, String> substitutionHeaders = new HashMap<>();
+
+    // the query parameter keys subject to secure string substitution, mapped to the pattern finding their values
+    private static Map<String, Pattern> substitutionQueryParams = new HashMap<>();
+
     // active mutator for customizing Approov request and result handling
     private static ApproovServiceMutator serviceMutator = ApproovServiceMutator.DEFAULT;
 
@@ -471,6 +477,8 @@ public class ApproovService {
         bindingHeader = null;
         useApproovStatusIfNoToken = false;
         exclusionURLRegexs = new HashMap<>();
+        substitutionHeaders = new HashMap<>();
+        substitutionQueryParams = new HashMap<>();
         serviceMutator = ApproovServiceMutator.DEFAULT;
     }
 
@@ -566,6 +574,8 @@ public class ApproovService {
         approovTraceIDHeader = null;
         bindingHeader = null;
         exclusionURLRegexs = null;
+        substitutionHeaders = new HashMap<>();
+        substitutionQueryParams = new HashMap<>();
         serviceMutator = ApproovServiceMutator.DEFAULT;
         ApproovLog.setLevel(ApproovLogLevel.INFO);
     }
@@ -699,9 +709,14 @@ public class ApproovService {
      * method should typically only be called once.
      *
      * @param header is the header to use for Approov token binding
+     * @throws IllegalArgumentException if the header is already used for secure string substitution
      */
     public static synchronized void setBindingHeader(String header) {
         ApproovLog.d(TAG, "setBindingHeader " + header);
+        if ((header != null) && (findSubstitutionHeaderKey(header) != null)) {
+            throw new IllegalArgumentException("Header " + header +
+                    " cannot be used for both token binding and secure string substitution");
+        }
         bindingHeader = header;
     }
 
@@ -783,6 +798,132 @@ public class ApproovService {
             return null;
         }
         return formatApproovTokenHeaderValue(approovResults.getStatus().toString());
+    }
+
+    /**
+     * Adds the name of a header which should be subject to secure strings substitution. This means that if
+     * the header is present on a request made through the stack then the value will be used as a key to look
+     * up a secure string value which will be substituted into the header value instead. This allows easy
+     * migration to the use of secure strings. It applies to every request processed after the call. A
+     * required prefix may be specified to deal with cases such as the use of "Bearer " prefixed before values
+     * in an authorization header. Note that a secure string is only substituted into a request sent over TLS
+     * to an API added to Approov, with or without an Approov token. If the secure string fetch fails and the
+     * request proceeds, the fetch status name (such as "REJECTED") is placed after the prefix instead, while a
+     * value that is not a secure string key (UNKNOWN_KEY) is left as the app wrote it.
+     *
+     * @param header is the header to be marked for substitution
+     * @param requiredPrefix is any required prefix to the value being substituted or null if not required
+     * @throws IllegalArgumentException if the header is null or is already used for token binding
+     */
+    public static synchronized void addSubstitutionHeader(String header, String requiredPrefix) {
+        ApproovLog.d(TAG, "addSubstitutionHeader " + header + ", " + requiredPrefix);
+        // a null header would fail every protected request, so it is refused here
+        if (header == null)
+            throw new IllegalArgumentException("addSubstitutionHeader: null header");
+        if ((bindingHeader != null) && header.equalsIgnoreCase(bindingHeader)) {
+            throw new IllegalArgumentException("Header " + header +
+                    " cannot be used for both token binding and secure string substitution");
+        }
+
+        // header names are case-insensitive so remove any equivalent entry first, keeping the casing of the
+        // latest call
+        String existingKey = findSubstitutionHeaderKey(header);
+        if (existingKey != null)
+            substitutionHeaders.remove(existingKey);
+        substitutionHeaders.put(header, (requiredPrefix == null) ? "" : requiredPrefix);
+    }
+
+    /**
+     * Removes a header previously added using addSubstitutionHeader, matched without regard to case.
+     *
+     * @param header is the header to be removed for substitution
+     */
+    public static synchronized void removeSubstitutionHeader(String header) {
+        ApproovLog.d(TAG, "removeSubstitutionHeader " + header);
+        String existingKey = findSubstitutionHeaderKey(header);
+        if (existingKey != null)
+            substitutionHeaders.remove(existingKey);
+    }
+
+    /**
+     * Finds the stored substitution header key matching a header name without regard to case.
+     *
+     * @param header is the header name to find
+     * @return the stored key, or null if there is none
+     */
+    private static String findSubstitutionHeaderKey(String header) {
+        if (header == null)
+            return null;
+        for (String key : substitutionHeaders.keySet()) {
+            if (header.equalsIgnoreCase(key))
+                return key;
+        }
+        return null;
+    }
+
+    /**
+     * Gets the map of headers that are subject to substitution.
+     *
+     * @return a map of headers that are subject to substitution, mapped to the required prefix
+     * @throws IllegalStateException if the ApproovService is not initialized
+     */
+    public static synchronized Map<String, String> getSubstitutionHeaders() {
+        if (!isInitialized)
+            throw new IllegalStateException("ApproovService is not initialized");
+        return new HashMap<>(substitutionHeaders);
+    }
+
+    /**
+     * Adds a key name for a query parameter that should be subject to secure strings substitution. This means
+     * that if the query parameter is present in the URL of a request made through the stack then the value
+     * will be used as a key to look up a secure string value which will be substituted as the query parameter
+     * value instead. This allows easy migration to the use of secure strings. It applies to every request
+     * processed after the call. The key is matched as a literal string and every occurrence of it in the query
+     * is substituted. Note that a secure string is only substituted into a request sent over TLS to an API
+     * added to Approov, with or without an Approov token. If the secure string fetch fails and the request
+     * proceeds, the fetch status name (such as "REJECTED") becomes the value instead, while a value that is
+     * not a secure string key (UNKNOWN_KEY) is left as the app wrote it.
+     *
+     * @param key is the query parameter key name to be added for substitution
+     */
+    public static synchronized void addSubstitutionQueryParam(String key) {
+        ApproovLog.d(TAG, "addSubstitutionQueryParam " + key);
+        if (key == null)
+            throw new IllegalArgumentException("addSubstitutionQueryParam: null key");
+        // the key is quoted so that a key such as "a.b" never matches another parameter
+        substitutionQueryParams.put(key, queryParamPattern(key));
+    }
+
+    /**
+     * Gets the pattern that finds the values of a query parameter in a URL, as group 1.
+     *
+     * @param key is the query parameter key, matched as a literal string
+     * @return the pattern
+     */
+    static Pattern queryParamPattern(String key) {
+        return Pattern.compile("[\\?&]" + Pattern.quote(key) + "=([^&;#]+)");
+    }
+
+    /**
+     * Removes a query parameter key name previously added using addSubstitutionQueryParam.
+     *
+     * @param key is the query parameter key name to be removed for substitution
+     */
+    public static synchronized void removeSubstitutionQueryParam(String key) {
+        ApproovLog.d(TAG, "removeSubstitutionQueryParam " + key);
+        substitutionQueryParams.remove(key);
+    }
+
+    /**
+     * Gets the map of substitution query parameters.
+     *
+     * @return a map of query parameters to be substituted, mapped to the compiled Pattern
+     * @throws IllegalStateException if the ApproovService is not initialized
+     */
+    public static synchronized Map<String, Pattern> getSubstitutionQueryParams() {
+        if (!isInitialized)
+            throw new IllegalStateException("ApproovService is not initialized");
+        return new HashMap<>(substitutionQueryParams);
     }
 
     /**
@@ -1270,192 +1411,210 @@ public class ApproovService {
     }
 
     /**
-     * Potentially substitutes a header value in the map supplied. This determines if the given
-     * substitution header is present and, if so, looks at the present value and determines if it
-     * corresponds to a key of a secure string. If so then the header value is remapped to the secure
-     * string value. A required prefix may be specified to deal with cases such as the use of
-     * "Bearer " prefixed before values in an authorization header. If the attestation fails for
-     * any reason then an ApproovException is thrown. This will be ApproovRejectionException if
-     * the app has failed Approov checks or ApproovNetworkException for networking issues where a
-     * user initiated retry of the operation should be allowed. Note that this function should only
-     * be called by a request getHeaders function that provides the ephemeral header values, as
-     * the output should not be cached. Note that this method does not exclude substitutions made in
-     * any added excluded URLs.
+     * Determines whether secure strings may be substituted for a URL, which is only on a protected channel: a
+     * token-protected (SUCCESS) or secrets-only (UNPROTECTED_URL) API over TLS. A token is fetched for an https
+     * URL to find this out, as on the request path, and the reason a placeholder is left is logged by name.
+     *
+     * @param url is the URL of the request
+     * @param what names the header or query parameter for the log, never its value
+     * @return true if secure strings may be substituted, false otherwise
+     * @throws ApproovException if the SDK fails
+     */
+    private static boolean isProtectedChannel(String url, String what) throws ApproovException {
+        if (!ApproovHurlStack.isHttps(url)) {
+            ApproovLog.w(TAG, "Secure string not substituted in " + what + ": request is not https, placeholder left");
+            return false;
+        }
+        Approov.TokenFetchResult urlResults = ApproovHurlStack.fetchForRequest("fetchApproovTokenAndWait",
+                () -> Approov.fetchApproovTokenAndWait(url));
+        String reason = ApproovHurlStack.undeliveredReason(url, urlResults);
+        if (reason != null) {
+            ApproovHurlStack.logPlaceholderLeft(
+                    ApproovHurlStack.isConfigurationReason(url, urlResults.getStatus()),
+                    "Secure string not substituted in " + what + ": " + reason + ", placeholder left");
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Gets the value to place in a placeholder after its secure string fetch: the secure string if the mutator
+     * accepts it and the stack can carry it, the status name if the fetch failed and the request continues, or
+     * null to leave the placeholder as it is (a declined SUCCESS, UNKNOWN_KEY, or a value that cannot be
+     * carried).
+     *
+     * @param approovResults is the secure string fetch result
+     * @param substitute is the decision of the substitution hook
+     * @param carried is true if the stack carries the secure string unchanged
+     * @param what names the header or query parameter for the log, never its value
+     * @return the value to place, or null to leave the placeholder
+     */
+    private static String substitutionValue(Approov.TokenFetchResult approovResults, boolean substitute,
+            boolean carried, String what) {
+        String secureString = approovResults.getSecureString();
+        String failureStatus = ApproovHurlStack.failureStatusValue(approovResults);
+        if (substitute && (secureString != null)) {
+            if (carried)
+                return secureString;
+            // a value the stack cannot carry leaves the placeholder and is never logged
+            ApproovLog.w(TAG, "Secure string not substituted in " + what
+                    + ": value cannot be carried unchanged, placeholder left");
+            return null;
+        }
+        if (failureStatus != null) {
+            ApproovLog.d(TAG, "Secure string not substituted in " + what + ": secure string fetch status "
+                    + describeStatus(approovResults) + ", status sent in its place");
+            return failureStatus;
+        }
+        ApproovLog.d(TAG, "Secure string not substituted in " + what + ": "
+                + ApproovHurlStack.placeholderLeftReason(substitute, approovResults) + ", placeholder left");
+        return null;
+    }
+
+    /**
+     * Potentially substitutes a header value in the map supplied. This determines if the given substitution
+     * header is present and, if so, uses the present value, after any required prefix, as the key of a secure
+     * string, which replaces it. A secure string is only substituted for a URL on a protected channel: an API
+     * added to Approov, with or without an Approov token, over TLS. If the secure string fetch fails the fetch
+     * status name (such as "REJECTED") is placed after the prefix instead, while a value that is not a secure
+     * string key (UNKNOWN_KEY) is left as it is. The request is never aborted because of a secure string by
+     * the standard service mutators. Note that this function should only be called by a request getHeaders
+     * function that provides the ephemeral header values, as the output should not be cached, and that a value
+     * placed by this method is the app's own header, which a redirect carries as HttpURLConnection does.
+     * Substitution headers added with addSubstitutionHeader are substituted by the stack instead, for each
+     * attempt and each redirect. Note that this method does not exclude substitutions made in any added
+     * excluded URLs.
      *
      * @param url is the URL for the request
      * @param headers are the defined headers to be updated
      * @param substitutionHeader is the name of any header whose value may be substituted
      * @param requiredPrefix is any required prefix to the value being substituted or null if not required
-     * @throws ApproovException if here was a problem
+     * @throws ApproovException if the SDK fails or the service mutator aborts the request
      */
     public static void substituteHeader(String url, Map<String, String> headers, String substitutionHeader,
                                         String requiredPrefix) throws ApproovException {
-        if (!isApproovEnabled()) return;
-        Approov.TokenFetchResult urlStatus;
-        try {
-            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
-        } catch (IllegalStateException e) {
-            throw new ApproovException(e);
-        } catch (IllegalArgumentException e) {
-            throw new ApproovException(e);
-        }
-        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
-            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
-            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
-            return;
-        }
-
-        String prefix = requiredPrefix;
-        if (prefix == null)
-            prefix = "";
+        if (!isApproovProtectionEnabled()) return;
+        String prefix = (requiredPrefix == null) ? "" : requiredPrefix;
         String value = headers.get(substitutionHeader);
-        if ((value != null) && value.startsWith(prefix) && (value.length() > prefix.length())) {
-            // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
-            Approov.TokenFetchResult approovResults;
-            final String secureStringKey = value.substring(prefix.length());
-            try {
-                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(secureStringKey, null));
-                ApproovLog.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus().toString());
-            }
-            catch (IllegalStateException e) {
-                throw new ApproovException(e);
-            }
-            catch (IllegalArgumentException e) {
-                throw new ApproovException(e);
-            }
+        if ((value == null) || !value.startsWith(prefix) || (value.length() <= prefix.length()))
+            return;
+        String what = "header " + substitutionHeader;
+        if (!isProtectedChannel(url, what))
+            return;
 
-            if (getServiceMutator().handleRequestHeaderSubstitutionResult(approovResults, substitutionHeader)) {
-                // Only overwrite the header when a non-empty secure string is available.
-                // A null or empty result means substitution yielded no value; the original
-                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
-                String secureString = approovResults.getSecureString();
-                if (secureString != null && !secureString.isEmpty()) {
-                    headers.put(substitutionHeader, prefix + secureString);
-                }
-            }
-        }
+        // fetch any secure string keyed by the value
+        final String secureStringKey = value.substring(prefix.length());
+        Approov.TokenFetchResult approovResults = ApproovHurlStack.fetchForRequest("fetchSecureStringAndWait",
+                () -> Approov.fetchSecureStringAndWait(secureStringKey, null));
+        ApproovLog.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus());
+        ApproovServiceMutator mutator = getServiceMutator();
+        boolean substitute = callMutator("handleRequestHeaderSubstitutionResult",
+                () -> mutator.handleRequestHeaderSubstitutionResult(approovResults, substitutionHeader));
+        String placed = substitutionValue(approovResults, substitute,
+                isSafeHeaderValue(approovResults.getSecureString()), what);
+        if (placed != null)
+            headers.put(substitutionHeader, prefix + placed);
     }
 
     /**
-     * Potentially substitutes a parameter value in the map supplied. This determines if the given
-     * substitution query parameter is present and, if so, looks at the present value and determines if it
-     * corresponds to a key of a secure string. If so then the parameter value is remapped to the secure
-     * string value. If the attestation fails for any reason then an ApproovException is thrown. This
-     * will be ApproovRejectionException if the app has failed Approov checks or ApproovNetworkException
-     * for networking issues where a user initiated retry of the operation should be allowed. Note that
-     * this function should only be called by a request getParams function that provides the ephemeral
-     * params values, as the output should not be cached. Note that this method does not exclude
-     * substitutions made in any added excluded URLs.
+     * Potentially substitutes a parameter value in the map supplied. This determines if the given substitution
+     * parameter is present and, if so, uses the present value as the key of a secure string, which replaces it.
+     * A secure string is only substituted for a URL on a protected channel: an API added to Approov, with or
+     * without an Approov token, over TLS. If the secure string fetch fails the fetch status name (such as
+     * "REJECTED") is placed instead, while a value that is not a secure string key (UNKNOWN_KEY) is left as it
+     * is. The request is never aborted because of a secure string by the standard service mutators. Note that
+     * this function should only be called by a request getParams function that provides the ephemeral params
+     * values, as the output should not be cached. Note that this method does not exclude substitutions made in
+     * any added excluded URLs.
      *
      * @param url is the URL for the request
      * @param params are the defined params to be updated
      * @param queryParam is the name of any parameter whose value may be substituted
-     * @throws ApproovException if here was a problem
+     * @throws ApproovException if the SDK fails or the service mutator aborts the request
      */
-    public static void substituteQueryParam(String url, Map<String, String> params, String queryParam) throws ApproovException {
-        if (!isApproovEnabled()) return;
-        Approov.TokenFetchResult urlStatus;
-        try {
-            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
-        } catch (IllegalStateException e) {
-            throw new ApproovException(e);
-        } catch (IllegalArgumentException e) {
-            throw new ApproovException(e);
-        }
-        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
-            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
-            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
-            return;
-        }
-
+    public static void substituteQueryParam(String url, Map<String, String> params, String queryParam)
+            throws ApproovException {
+        if (!isApproovProtectionEnabled()) return;
         String value = params.get(queryParam);
-        if (value != null) {
-            // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
-            Approov.TokenFetchResult approovResults;
-            try {
-                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(value, null));
-                ApproovLog.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus().toString());
-            }
-            catch (IllegalStateException e) {
-                throw new ApproovException(e);
-            }
-            catch (IllegalArgumentException e) {
-                throw new ApproovException(e);
-            }
+        if ((value == null) || value.isEmpty())
+            return;
+        String what = "parameter " + queryParam;
+        if (!isProtectedChannel(url, what))
+            return;
 
-            if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParam)) {
-                // Only overwrite the parameter when a non-empty secure string is available.
-                // A null or empty result means substitution yielded no value; the original
-                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
-                String secureString = approovResults.getSecureString();
-                if (secureString != null && !secureString.isEmpty()) {
-                    params.put(queryParam, secureString);
-                }
-            }
-        }
+        // fetch any secure string keyed by the value; Volley encodes the parameters, so any value is carried
+        Approov.TokenFetchResult approovResults = ApproovHurlStack.fetchForRequest("fetchSecureStringAndWait",
+                () -> Approov.fetchSecureStringAndWait(value, null));
+        ApproovLog.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus());
+        ApproovServiceMutator mutator = getServiceMutator();
+        boolean substitute = callMutator("handleRequestQueryParamSubstitutionResult",
+                () -> mutator.handleRequestQueryParamSubstitutionResult(approovResults, queryParam));
+        String placed = substitutionValue(approovResults, substitute, true, what);
+        if (placed != null)
+            params.put(queryParam, placed);
     }
 
     /**
-     * Substitutes the given query parameter in the URL. If no substitution is made then the
-     * original URL is returned, otherwise a new one is constructed with the revised query
-     * parameter value. Since this modifies the URL itself this must be done before opening the
-     * HttpsURLConnection. If it is not currently possible to fetch secure strings token due to
-     * networking issues then ApproovNetworkException is thrown and a user initiated retry of the
-     * operation should be allowed. ApproovRejectionException may be thrown if the attestation
-     * fails and secure strings cannot be obtained. Other ApproovExecptions represent a more
-     * permanent error condition. Note that this method does not exclude substitutions made in
-     * any added excluded URLs.
+     * Substitutes the given query parameter in the URL. Every occurrence of the parameter in the query is
+     * substituted, each value looked up as the key of its own secure string. If no substitution is made then
+     * the original URL is returned, otherwise a new one is constructed with the revised query parameter values.
+     * Since this modifies the URL itself this must be done before the request is made. A secure string is
+     * only substituted into a URL on a protected channel: an API added to Approov, with or without an Approov
+     * token, over TLS. If the secure string fetch fails the fetch status name (such as "REJECTED") is placed
+     * instead, while a value that is not a secure string key (UNKNOWN_KEY), and a secure string the URL cannot
+     * carry unchanged, are left as they are. The request is never aborted because of a secure string by the
+     * standard service mutators. Note that this method does not exclude substitutions made in any added
+     * excluded URLs. Substitution query parameters added with addSubstitutionQueryParam are substituted by the
+     * stack instead.
      *
      * @param url is the URL being analyzed for substitution
      * @param queryParameter is the parameter to be potentially substituted
      * @return URL passed in, or modified with a new URL if required
-     * @throws ApproovException if it is not possible to obtain secure strings for substitution
+     * @throws ApproovException if the SDK fails or the service mutator aborts the request
      */
     public static String substituteQueryParamInURLString(String url, String queryParameter) throws ApproovException {
-        if (!isApproovEnabled()) return url;
-        Approov.TokenFetchResult urlStatus;
-        try {
-            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
-        } catch (IllegalStateException e) {
-            throw new ApproovException(e);
-        } catch (IllegalArgumentException e) {
-            throw new ApproovException(e);
-        }
-        if (urlStatus.getStatus() == Approov.TokenFetchStatus.UNPROTECTED_URL || 
-            urlStatus.getStatus() == Approov.TokenFetchStatus.UNKNOWN_URL ||
-            urlStatus.getStatus() == Approov.TokenFetchStatus.NO_APPROOV_SERVICE) {
+        if (!isApproovProtectionEnabled()) return url;
+        Pattern pattern = queryParamPattern(queryParameter);
+        int query = url.indexOf('?');
+        if (query < 0)
             return url;
-        }
+        int fragment = url.indexOf('#', query);
+        Matcher probe = pattern.matcher(url);
+        probe.region(query, (fragment < 0) ? url.length() : fragment);
+        if (!probe.find())
+            return url;
+        String what = "query parameter " + queryParameter;
+        if (!isProtectedChannel(url, what))
+            return url;
 
-        Pattern pattern = Pattern.compile("[\\?&]"+queryParameter+"=([^&;]+)");
-        Matcher matcher = pattern.matcher(url);
-        if (matcher.find()) {
-            // we have found an occurrence of the query parameter to be replaced so we look up the existing
-            // value as a key for a secure string
+        // every occurrence of the parameter in the query is substituted, each value looked up as its own key,
+        // and the search is confined to the query after the first '?' and before any '#'
+        ApproovServiceMutator mutator = getServiceMutator();
+        String replacementURL = url;
+        int from = query;
+        while (true) {
+            int hash = replacementURL.indexOf('#', from);
+            Matcher matcher = pattern.matcher(replacementURL);
+            matcher.region(from, (hash < 0) ? replacementURL.length() : hash);
+            if (!matcher.find())
+                break;
+            int start = matcher.start(1);
+            from = matcher.end(1);
             String queryValue = matcher.group(1);
-            Approov.TokenFetchResult approovResults;
-            try {
-                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(queryValue, null));
-            }
-            catch (IllegalStateException e) {
-                throw new ApproovException(e);
-            }
-            catch (IllegalArgumentException e) {
-                throw new ApproovException(e);
-            }
-            ApproovLog.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
-            if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParameter)) {
-                // Only substitute when a non-empty secure string is available.
-                // A null or empty result means substitution yielded no value; the original
-                // placeholder is preserved in place (TESTING_REQUIREMENTS §2 Missing Artifacts Fallback).
-                String secureString = approovResults.getSecureString();
-                if (secureString != null && !secureString.isEmpty()) {
-                    return new StringBuilder(url).replace(matcher.start(1),
-                            matcher.end(1), secureString).toString();
-                }
+            Approov.TokenFetchResult approovResults = ApproovHurlStack.fetchForRequest("fetchSecureStringAndWait",
+                    () -> Approov.fetchSecureStringAndWait(queryValue, null));
+            ApproovLog.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus());
+            boolean substitute = callMutator("handleRequestQueryParamSubstitutionResult",
+                    () -> mutator.handleRequestQueryParamSubstitutionResult(approovResults, queryParameter));
+            String secureString = approovResults.getSecureString();
+            String placed = substitutionValue(approovResults, substitute,
+                    (secureString != null) && ApproovHurlStack.isCarriedInQuery(secureString), what);
+            if (placed != null) {
+                replacementURL = new StringBuilder(replacementURL).replace(start, from, placed).toString();
+                from = start + placed.length();
             }
         }
-        return url;
+        return replacementURL;
     }
 }
 

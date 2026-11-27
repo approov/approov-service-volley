@@ -36,6 +36,8 @@ final class ApproovTestSupport {
         setStaticField("bindingHeader", null);
         setStaticField("serviceMutator", ApproovServiceMutator.DEFAULT);
         setStaticField("exclusionURLRegexs", new HashMap<String, Pattern>());
+        setStaticField("substitutionHeaders", new HashMap<String, String>());
+        setStaticField("substitutionQueryParams", new HashMap<String, Pattern>());
     }
 
     static void initializeApproovService(MockedStatic<Approov> approov) {
