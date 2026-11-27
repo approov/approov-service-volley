@@ -30,17 +30,22 @@ import com.criticalblue.approovsdk.Approov;
 
 import java.io.IOException;
 import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -107,6 +112,291 @@ public class ApproovService {
      * Construction is disallowed as this is a static only class.
      */
     private ApproovService() {
+    }
+
+    /**
+     * Converts a RuntimeException thrown by an Approov SDK call on the request path into an ApproovException
+     * with it as the cause, logged at error level, so that the request fails through the normal Volley error
+     * handling.
+     *
+     * @param call is the name of the SDK method that threw, for the log
+     * @param e is the exception thrown by the SDK
+     * @return the exception to throw
+     */
+    static ApproovException sdkFailure(String call, RuntimeException e) {
+        ApproovException wrapped = new ApproovException(e);
+        ApproovLog.e(TAG, call + ": " + wrapped.getMessage());
+        return wrapped;
+    }
+
+    /**
+     * Reports an Approov SDK fetch that returned no result, logged at error level.
+     *
+     * @param call is the name of the SDK method, for the log and the exception message
+     * @return the exception to throw
+     */
+    static ApproovException sdkNoResult(String call) {
+        String message = "Approov SDK " + call + " returned no result";
+        ApproovLog.e(TAG, message);
+        return new ApproovException(message);
+    }
+
+    // a call into the installed service mutator
+    interface MutatorHook<T> {
+        T call() throws ApproovException;
+    }
+
+    // the exceptions raised by the standard request decisions during the mutator hook call in progress on
+    // this thread, or null outside a hook call
+    private static final ThreadLocal<Set<Throwable>> standardDecisions = new ThreadLocal<>();
+
+    /**
+     * Records an exception raised by a standard request decision (the interface defaults of
+     * ApproovServiceMutator, which CLOSE_FAILURE uses) during the hook call in progress on this thread,
+     * so that callMutator passes it through unchanged whether the installed mutator inherited or called
+     * the decision. Outside a hook call it only returns the exception.
+     *
+     * @param e is the exception the decision raises
+     * @return the exception, to be thrown
+     */
+    static <E extends ApproovException> E standardDecision(E e) {
+        Set<Throwable> made = standardDecisions.get();
+        if (made != null)
+            made.add(e);
+        return e;
+    }
+
+    /**
+     * Calls a hook of the installed service mutator on the request path. An ApproovException raised by a
+     * standard decision during the call, or by message signing, is passed through unchanged. Any other
+     * ApproovException and any RuntimeException is logged naming the hook and converted to an
+     * ApproovException with the original as its cause, so that the request fails through the normal Volley
+     * error handling and the app receives it as a VolleyError.
+     *
+     * @param hook is the name of the hook, for the log and the exception message
+     * @param call is the call into the mutator
+     * @return the result of the hook
+     * @throws ApproovException if the hook throws one, or throws a RuntimeException
+     */
+    static <T> T callMutator(String hook, MutatorHook<T> call) throws ApproovException {
+        return callMutator(hook, call, false);
+    }
+
+    /**
+     * Calls a hook of the installed service mutator on the request path as callMutator(hook, call),
+     * except that an exception raised by a standard decision may be ignored, in which case null is
+     * returned. This is used where the standard decisions never abort a request but an app's own hook
+     * may, such as for a token fetch failure for a host that is not in the SDK pin set.
+     *
+     * @param hook is the name of the hook
+     * @param call is the call into the mutator
+     * @param ignoreStandard is true if an exception raised by a standard decision is to be ignored
+     * @return the result of the hook, or null if an exception raised by a standard decision was ignored
+     * @throws ApproovException if the hook throws one, or throws a RuntimeException
+     */
+    static <T> T callMutator(String hook, MutatorHook<T> call, boolean ignoreStandard) throws ApproovException {
+        Set<Throwable> previous = standardDecisions.get();
+        Set<Throwable> made = Collections.newSetFromMap(new IdentityHashMap<Throwable, Boolean>());
+        standardDecisions.set(made);
+        try {
+            return call.call();
+        } catch (ApproovException e) {
+            // a standard decision keeps its form, even if caught and rethrown unchanged
+            if (made.contains(e)) {
+                if (ignoreStandard)
+                    return null;
+                throw e;
+            }
+            throw mutatorFailure(hook, e);
+        } catch (RuntimeException e) {
+            throw mutatorFailure(hook, e);
+        } finally {
+            if (previous == null)
+                standardDecisions.remove();
+            else
+                standardDecisions.set(previous);
+        }
+    }
+
+    /**
+     * Converts an exception thrown by a hook of the installed service mutator into an ApproovException
+     * with the original as its cause, logged at error level naming the hook.
+     *
+     * @param hook is the name of the hook
+     * @param e is the exception the hook threw
+     * @return the exception to throw
+     */
+    static ApproovException mutatorFailure(String hook, Exception e) {
+        String message = "ApproovServiceMutator." + hook + " failed: " + e;
+        ApproovLog.e(TAG, message);
+        return new ApproovException(message, e);
+    }
+
+    /**
+     * Determines if a header value can be carried by the network stack unchanged, which allows horizontal
+     * tab and printable ASCII only. A secure string may break this rule, while a token or trace ID that does
+     * is reported as an SDK problem.
+     *
+     * @param value is the header value
+     * @return true if the value can be set, false otherwise
+     */
+    static boolean isSafeHeaderValue(String value) {
+        if (value == null)
+            return true;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if ((c != '\t') && ((c < 0x20) || (c > 0x7e)))
+                return false;
+        }
+        return true;
+    }
+
+    /**
+     * Reports a header value, set from a value the app supplied, that a header cannot carry. It is logged
+     * at error level and returned as an ApproovException naming the header, never quoting the value.
+     *
+     * @param header is the header name
+     * @return the exception to throw
+     */
+    static ApproovException unsafeHeaderValue(String header) {
+        String message = "Approov header " + header + ": invalid character in value";
+        ApproovLog.e(TAG, message);
+        return new ApproovException(message);
+    }
+
+    /**
+     * Reports a value issued by the Approov SDK (a token or a trace ID) that a header cannot carry, which
+     * is an SDK problem rather than an app configuration error. It is logged at error level and returned
+     * as an ApproovException naming the header, never quoting the value.
+     *
+     * @param what is what the SDK issued, such as "token"
+     * @param header is the header name
+     * @return the exception to throw
+     */
+    static ApproovException unsafeSdkValue(String what, String header) {
+        String message = "Approov header " + header + ": invalid character in SDK " + what;
+        ApproovLog.e(TAG, message);
+        return new ApproovException(message);
+    }
+
+    /**
+     * Gets the name of a token fetch status as the SDK reports it, which is also the value written in place
+     * of a secure string placeholder that could not be fetched.
+     *
+     * @param approovResults is the token fetch result
+     * @return the status name
+     */
+    static String statusName(Approov.TokenFetchResult approovResults) {
+        return approovResults.getStatus().name();
+    }
+
+    /**
+     * Describes a fetch result for a log line or an exception message as the status name and any ARC and
+     * rejection reasons, such as "REJECTED, ARC 1A2B, rejection reasons rooted". It never includes a token,
+     * a secure string or a placeholder.
+     *
+     * @param approovResults is the fetch result
+     * @return the description of the fetch result
+     */
+    static String describeStatus(Approov.TokenFetchResult approovResults) {
+        StringBuilder sb = new StringBuilder(approovResults.getStatus().name());
+        String arc = approovResults.getARC();
+        if ((arc != null) && !arc.isEmpty())
+            sb.append(", ARC ").append(arc);
+        String reasons = approovResults.getRejectionReasons();
+        if ((reasons != null) && !reasons.isEmpty())
+            sb.append(", rejection reasons ").append(reasons);
+        return sb.toString();
+    }
+
+    /**
+     * Gets the host of a URL for a log line or an exception message, which never carries its path or query
+     * as they may hold personal data or a secret.
+     *
+     * @param url is the URL
+     * @return the host, or "a URL without a host" if there is none
+     */
+    static String loggableHost(String url) {
+        try {
+            String host = (url != null) ? new URL(url).getHost() : null;
+            return ((host != null) && !host.isEmpty()) ? host : "a URL without a host";
+        } catch (MalformedURLException e) {
+            return "a URL without a host";
+        }
+    }
+
+    /**
+     * Normalizes a host for comparison with the keys of the SDK pin set: lowercase, without one trailing
+     * dot and without the brackets of an IPv6 address.
+     *
+     * @param host is the host
+     * @return the normalized host
+     */
+    static String normalizeHost(String host) {
+        String normalized = host.toLowerCase(Locale.ROOT);
+        if (normalized.endsWith("."))
+            normalized = normalized.substring(0, normalized.length() - 1);
+        if (normalized.startsWith("[") && normalized.endsWith("]"))
+            normalized = normalized.substring(1, normalized.length() - 1);
+        return normalized;
+    }
+
+    /**
+     * Determines if a host is an Approov API domain, that is a key of the SDK public-key-sha256 pin set
+     * other than the "*" managed trust roots key, compared without regard to case and ignoring one
+     * trailing dot. An empty pin set, or one the SDK fails to provide, lists no host. This only decides
+     * what happens to a request whose token fetch failed, as one to a host that is not listed is sent
+     * untouched unless the app's own mutator aborts it.
+     *
+     * @param host is the request host
+     * @return true if the host is a key of the pin set, false otherwise
+     */
+    static boolean isApproovApiHost(String host) {
+        if ((host == null) || host.isEmpty())
+            return false;
+        Map<String, List<String>> pins;
+        try {
+            pins = Approov.getPins("public-key-sha256");
+        } catch (RuntimeException e) {
+            // a pin set that cannot be read lists no host
+            ApproovLog.e(TAG, "Approov SDK getPins failed: " + e);
+            return false;
+        }
+        if (pins == null)
+            return false;
+        String wanted = normalizeHost(host);
+        for (String domain : pins.keySet()) {
+            if ((domain != null) && !domain.equals("*") && normalizeHost(domain).equals(wanted))
+                return true;
+        }
+        return false;
+    }
+
+    /**
+     * Builds the value of the Approov token header from a token fetch result, accounting for the option to
+     * use the fetch status as the value when no token is available.
+     *
+     * @param prefix is the prefix to be placed before the token
+     * @param approovResults is the token fetch result
+     * @return the value to set on the Approov token header
+     */
+    static String buildTokenHeaderValue(String prefix, Approov.TokenFetchResult approovResults) {
+        String token = approovResults.getToken();
+        if (token == null)
+            token = "";
+        if (token.isEmpty() && getUseApproovStatusIfNoToken())
+            return prefix + statusName(approovResults);
+        return prefix + token;
+    }
+
+    /**
+     * Gets the token header name and prefix together, so that a request never combines the header of one
+     * configuration with the prefix of another if the app changes them while requests are in flight.
+     *
+     * @return a two element array of the header name and prefix
+     */
+    static synchronized String[] snapshotTokenHeader() {
+        return new String[] { approovTokenHeader, (approovTokenPrefix != null) ? approovTokenPrefix : "" };
     }
 
     /**
@@ -1166,173 +1456,6 @@ public class ApproovService {
             }
         }
         return url;
-    }
-}
-
-/**
- * Alternative HurlStack to be used for Approov that adds Approov tokens and pinning. This
- * overrides certain methods in the default stack to provide this functionality. The pinning
- * approach used is immediately reactive to pinning changes.
- */
-class ApproovHurlStack extends HurlStack {
-    // logging tag
-    private static final String TAG = "ApproovHurlStack";
-
-    /**
-     * Constructs an new HurlStack that adds Approov tokens and pinning.
-     */
-    public ApproovHurlStack() {
-        super();
-    }
-
-    /**
-     * Determines whether a fallback Approov status should be sent in the Approov
-     * token header when a request is allowed to continue without a real token.
-     */
-    private boolean shouldSendFallbackStatusHeader(Approov.TokenFetchResult approovResults) {
-        if (!ApproovService.getUseApproovStatusIfNoToken()) {
-            return false;
-        }
-
-        switch (approovResults.getStatus()) {
-            case NO_NETWORK:
-            case POOR_NETWORK:
-            case MITM_DETECTED:
-            case NO_APPROOV_SERVICE:
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    /**
-     * Test seam that allows subclasses to intercept the final network dispatch.
-     */
-    protected HttpResponse executeNetworkRequest(Request<?> request, Map<String, String> headers)
-            throws IOException, AuthFailureError {
-        return super.executeRequest(request, headers);
-    }
-
-    /**
-     * Adds pinning to the connection by overriding the HostnameVerifier with something that pins
-     * the connections. The connection must be for https.
-     */
-    @Override
-    protected HttpURLConnection createConnection(URL url) throws IOException {
-        HttpURLConnection connection = super.createConnection(url);
-
-        // Workaround for the M release HttpURLConnection not observing the
-        // HttpURLConnection.setFollowRedirects() property.
-        // https://code.google.com/p/android/issues/detail?id=194495
-        connection.setInstanceFollowRedirects(HttpURLConnection.getFollowRedirects());
-
-        if (!ApproovService.isApproovEnabled()) {
-            return connection;
-        }
-
-        // ensure the connection is pinned
-        if (connection instanceof HttpsURLConnection) {
-            HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
-            PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
-            httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
-
-            // The HostnameVerifier (and therefore the live-pin check) only runs during the TLS
-            // handshake of a NEW connection, never when HttpURLConnection reuses a pooled
-            // keep-alive connection. Request "Connection: close" on pinned connections so each
-            // request performs a fresh handshake: this guarantees a dynamic pin update (spec §4)
-            // takes effect on the very next request instead of lingering on a connection that was
-            // established under a now-superseded pin set.
-            httpsConnection.setRequestProperty("Connection", "close");
-        }
-
-        return connection;
-    }
-
-    /**
-     * Adds Approov token for the given request The Approov token is added in a header. If a
-     * binding header has been specified then this should be available. If it is not
-     * currently possible to fetch an Approov token (typically due to no or poor network) then
-     * an exception is thrown and a later retry should be made.
-     */
-    @Override
-    public HttpResponse executeRequest(Request<?> request, Map<String, String> additionalHeaders)
-            throws IOException, AuthFailureError {
-        
-        if (!ApproovService.isApproovEnabled()) {
-            return executeNetworkRequest(request, additionalHeaders);
-        }
-
-        ApproovServiceMutator mutator = ApproovService.getServiceMutator();
-        if (!mutator.handleRequestShouldProcess(request, additionalHeaders)) {
-            return executeNetworkRequest(request, additionalHeaders);
-        }
-
-        String url = request.getUrl();
-        Map<String, String> headers = additionalHeaders == null
-                ? new LinkedHashMap<String, String>()
-                : new LinkedHashMap<>(additionalHeaders);
-
-        // update the data hash based on any token binding header available from "getHeaders()"
-        // on the request (this is the standard way that additional headers are added)
-        String bindingHeader = ApproovService.getBindingHeader();
-        if (bindingHeader != null) {
-            String headerValue = headers.get(bindingHeader);
-            if (headerValue == null) {
-                Map<String, String> requestHeaders = request.getHeaders();
-                if (requestHeaders != null) {
-                    headerValue = requestHeaders.get(bindingHeader);
-                }
-            }
-            if (headerValue != null)
-                Approov.setDataHashInToken(headerValue);
-        }
-
-        // request an Approov token for the domain
-        Approov.TokenFetchResult approovResults;
-        try {
-            approovResults = ApproovService.fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
-        }
-        catch (IllegalStateException e) {
-            throw new ApproovException(e);
-        }
-        catch (IllegalArgumentException e) {
-            throw new ApproovException(e);
-        }
-        ApproovLog.d(TAG, "Token for " + ApproovLog.loggableURL(request.getUrl()) + ": " + approovResults.getLoggableToken());
-
-        boolean continueWithFullProcessing = mutator.handleRequestFetchTokenResult(approovResults, url);
-        ApproovRequestMutations changes = new ApproovRequestMutations();
-        String tokenHeaderValue = null;
-        if (continueWithFullProcessing) {
-            tokenHeaderValue = mutator.handleRequestTokenHeaderValue(approovResults, url);
-        } else if (shouldSendFallbackStatusHeader(approovResults)) {
-            tokenHeaderValue = ApproovService.getApproovTokenHeaderValueOrStatus(approovResults);
-            ApproovLog.d(TAG, "Proceeding with fallback token header " + ApproovService.getTokenHeader()
-                    + ": " + tokenHeaderValue);
-        } else {
-            return executeNetworkRequest(request, headers);
-        }
-
-        if (tokenHeaderValue != null) {
-            String tokenHeader = ApproovService.getTokenHeader();
-            headers.put(tokenHeader, tokenHeaderValue);
-            changes.setTokenHeaderKey(tokenHeader);
-        }
-
-        String traceIDHeader = ApproovService.getTraceIDHeader();
-        String traceID = approovResults.getTraceID();
-        if (traceIDHeader != null && traceID != null && !traceID.isEmpty()) {
-            headers.put(traceIDHeader, traceID);
-            changes.setTraceIDHeaderKey(traceIDHeader);
-        }
-
-        headers = mutator.handleRequestProcessedHeaders(request, headers, changes);
-        if (headers == null) {
-            headers = new LinkedHashMap<>();
-        }
-
-        // delegate the execution of the request to the parent handler
-        return executeNetworkRequest(request, headers);
     }
 }
 

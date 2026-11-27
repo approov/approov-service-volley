@@ -115,6 +115,9 @@ dependencies {
     // Test-only compile dependency: the message-signing unit tests (SignatureBaseBuilderTest,
     // TestComponentProvider) build fixture requests with okhttp3.Request/Headers.
     testImplementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // Test-only: the request path tests send real requests through the stack to local HTTPS servers.
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'com.squareup.okhttp3:okhttp-tls:4.12.0'
     if (findProject(':approov-sdk') != null) {
         testImplementation project(':approov-sdk')
     }
@@ -126,12 +129,16 @@ dependencies {
     testImplementation 'androidx.test:core:1.6.1'
 }
 
-// the mini-sdk test exercises the full request flow against the simulated attester and
-// cannot compile or run without the core-service-layers-testing projects
+// the mini-sdk tests (ApproovServiceMiniSdkTest, the request path tests named *370Test and their
+// fixtures) exercise the full request flow against the simulated attester and cannot compile or
+// run without the core-service-layers-testing projects
 if (findProject(':test-support') == null) {
     android.sourceSets.test.java.exclude '**/ApproovServiceMiniSdkTest.java'
+    android.sourceSets.test.java.exclude '**/*370Test.java'
+    android.sourceSets.test.java.exclude '**/MiniSdk*.java'
     tasks.withType(Test).configureEach {
         exclude '**/ApproovServiceMiniSdkTest*'
+        exclude '**/*370Test*'
     }
 }
 

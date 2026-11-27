@@ -79,6 +79,13 @@ public class ApproovHurlStackContractTest {
         }
     }
 
+    // lists api.example.com as an Approov API domain, a key of the SDK pin set, so that a token fetch failure
+    // for it is decided by the mutator rather than sent untouched
+    private static void listApiHost(MockedStatic<Approov> approov) {
+        approov.when(() -> Approov.getPins("public-key-sha256")).thenReturn(
+                java.util.Collections.singletonMap("api.example.com", java.util.Collections.<String>emptyList()));
+    }
+
     @Before
     public void setUp() {
         ApproovTestSupport.resetApproovServiceState();
@@ -94,6 +101,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackAddsApproovTokenTraceIdAndMutatorChangesOnSuccess() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setTokenHeader("Approov-Token", "Bearer ");
             RecordingMutator mutator = new RecordingMutator(true, "yes");
             ApproovService.setServiceMutator(mutator);
@@ -125,6 +133,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackUsesFetchStatusAsTokenValueWhenConfigured() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setUseApproovStatusIfNoToken(true);
             RecordingHurlStack stack = new RecordingHurlStack();
 
@@ -144,6 +153,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackUsesFetchStatusWhenSdkReturnsEmptyTokenAndFallbackEnabled() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setUseApproovStatusIfNoToken(true);
             RecordingHurlStack stack = new RecordingHurlStack();
 
@@ -163,9 +173,10 @@ public class ApproovHurlStackContractTest {
     }
 
     @Test
-    public void hurlStackKeepsFallbackStatusHeaderWhenMutatorReturnsFalse() throws Exception {
+    public void hurlStackSendsNoApproovHeaderWhenMutatorReturnsFalseOnAFailure() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setUseApproovStatusIfNoToken(true);
             ApproovService.setServiceMutator(new RecordingMutator(
                     true,
@@ -180,15 +191,17 @@ public class ApproovHurlStackContractTest {
 
             stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
 
-            assertEquals("MITM_DETECTED", stack.capturedHeaders.get("Approov-Token"));
-            assertNull(stack.capturedHeaders.get("Approov-TraceID"));
+            // false on a failure status sends the request with no token or trace header
+            assertFalse(stack.capturedHeaders.containsKey("Approov-Token"));
+            assertFalse(stack.capturedHeaders.containsKey("Approov-TraceID"));
         }
     }
 
     @Test
-    public void hurlStackSkipsTokenAndTraceHeadersOnNoApproovService() throws Exception {
+    public void hurlStackSendsAnEmptyTokenHeaderOnNoApproovService() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             RecordingHurlStack stack = new RecordingHurlStack();
 
             Approov.TokenFetchResult noServiceResult =
@@ -198,7 +211,8 @@ public class ApproovHurlStackContractTest {
 
             stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
 
-            assertFalse(stack.capturedHeaders.containsKey("Approov-Token"));
+            // NO_APPROOV_SERVICE proceeds with an empty token, and the empty trace ID is not sent
+            assertEquals("", stack.capturedHeaders.get("Approov-Token"));
             assertFalse(stack.capturedHeaders.containsKey("Approov-TraceID"));
         }
     }
@@ -207,6 +221,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackUsesFallbackStatusHeaderForNoApproovServiceWhenConfigured() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setUseApproovStatusIfNoToken(true);
             RecordingHurlStack stack = new RecordingHurlStack();
 
@@ -226,6 +241,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackCanDisableTraceIdHeaderEvenWhenTheSdkProvidesOne() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setTraceIDHeader(null);
             RecordingHurlStack stack = new RecordingHurlStack();
 
@@ -249,6 +265,7 @@ public class ApproovHurlStackContractTest {
     public void customMutatorCanBlockNoApproovServiceRequests() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
+            listApiHost(approov);
             ApproovService.setServiceMutator(new RecordingMutator(false, null));
             RecordingHurlStack stack = new RecordingHurlStack();
 
@@ -257,13 +274,18 @@ public class ApproovHurlStackContractTest {
             approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply"))
                     .thenReturn(noServiceResult);
 
-            ApproovNetworkException error = assertThrows(
-                    ApproovNetworkException.class,
+            // the app's own exception is reported as a failure of the hook, with the original as its cause
+            ApproovException error = assertThrows(
+                    ApproovException.class,
                     () -> stack.executeRequest(
                             ApproovTestSupport.request("https://api.example.com/reply"),
                             new LinkedHashMap<>()));
 
-            assertEquals("custom block", error.getMessage());
+            assertEquals(ApproovException.class, error.getClass());
+            assertTrue(error.getMessage().startsWith("ApproovServiceMutator.handleRequestFetchTokenResult failed: "));
+            assertTrue(error.getCause() instanceof ApproovNetworkException);
+            assertEquals("custom block", error.getCause().getMessage());
+            assertNull(stack.capturedRequest);
         }
     }
 }

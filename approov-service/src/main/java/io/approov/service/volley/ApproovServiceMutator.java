@@ -228,7 +228,8 @@ public interface ApproovServiceMutator {
     default boolean handleRequestShouldProcess(Request<?> request, Map<String, String> additionalHeaders)
             throws ApproovException {
         if (request == null) {
-            throw new ApproovException("handleRequestShouldProcess method was passed a request that is null!");
+            throw ApproovService.standardDecision(new ApproovException(
+                    "handleRequestShouldProcess method was passed a request that is null!"));
         }
         String url = request.getUrl();
         for (Pattern pattern : ApproovService.getExclusionURLRegexs().values()) {
@@ -248,7 +249,11 @@ public interface ApproovServiceMutator {
      * status is used in the token header, in which case they proceed with it, and every other status throws
      * ApproovFetchStatusException.
      * <p>
-     * The result decides the Approov headers and the message signing, never the secure strings.
+     * The result decides the Approov headers and the message signing, never the secure strings. True on
+     * SUCCESS adds the token and trace headers and any message signature, true on a failure status adds the
+     * token header with an empty token or the status and any trace header, and true on UNKNOWN_URL or
+     * UNPROTECTED_URL adds nothing. Note that for a failure on a host that is not in the SDK pin set the
+     * request is sent untouched whatever this returns, unless the implementation throws its own exception.
      *
      * @param approovResults the TokenFetchResult from Approov
      * @param url the URL for which the token was requested
@@ -277,41 +282,35 @@ public interface ApproovServiceMutator {
                     // a network failure proceeds if the status is to be sent in the token header instead
                     if (ApproovService.getUseApproovStatusIfNoToken())
                         return true;
-                    throw new ApproovNetworkException(status, message);
+                    throw ApproovService.standardDecision(new ApproovNetworkException(status, message));
                 }
-                throw new ApproovFetchStatusException(status, message);
+                throw ApproovService.standardDecision(new ApproovFetchStatusException(status, message));
         }
     }
 
     /**
-     * Determines the value to use for the Approov token header after a fetch result is accepted
-     * for continued request processing.
+     * Gives the value of the Approov token header for a fetch result. This is no longer called: the token
+     * header is set from the fetch result whenever handleRequestFetchTokenResult lets a request proceed
+     * with the Approov headers, holding the token on SUCCESS and otherwise an empty token, or the status with
+     * ApproovService.setUseApproovStatusIfNoToken(true), after the prefix. A mutator that must change the
+     * header does so in handleRequestProcessedHeaders.
      *
      * @param approovResults the TokenFetchResult from Approov
      * @param url the URL for which the token was requested
-     * @return the value to set on the Approov token header, or null to leave the header unset
-     * @throws ApproovException if the request should fail
+     * @return the value the layer sets on the Approov token header for this result
+     * @throws ApproovException never by the default implementation
+     * @deprecated the token header is set by the layer from the fetch result; this is no longer called
      */
+    @Deprecated
     default String handleRequestTokenHeaderValue(Approov.TokenFetchResult approovResults, String url)
             throws ApproovException {
-        if (approovResults.getStatus() == Approov.TokenFetchStatus.SUCCESS) {
-            if ((approovResults.getToken() == null || approovResults.getToken().isEmpty())
-                    && ApproovService.getUseApproovStatusIfNoToken()) {
-                return ApproovService.getApproovTokenHeaderValueOrStatus(approovResults);
-            }
-            return ApproovService.getApproovTokenHeaderValue(approovResults);
-        }
-        if (!ApproovService.getUseApproovStatusIfNoToken()) {
-            return null;
-        }
         switch (approovResults.getStatus()) {
             case UNKNOWN_URL:
             case UNPROTECTED_URL:
                 // no Approov headers for these
                 return null;
             default:
-                // a failure that proceeds sends the status
-                return ApproovService.getApproovTokenHeaderValueOrStatus(approovResults);
+                return ApproovService.buildTokenHeaderValue(ApproovService.snapshotTokenHeader()[1], approovResults);
         }
     }
 

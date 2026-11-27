@@ -211,6 +211,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     }
 
     @Override
+    @Deprecated
     public String handleRequestTokenHeaderValue(Approov.TokenFetchResult approovResults, String url)
             throws ApproovException {
         return decisions().handleRequestTokenHeaderValue(approovResults, url);
