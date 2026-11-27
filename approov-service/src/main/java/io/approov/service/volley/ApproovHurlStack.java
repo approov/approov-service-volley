@@ -177,17 +177,29 @@ class ApproovHurlStack extends HurlStack {
         if (!ApproovService.isApproovProtectionEnabled())
             return sendUntouched(request, cacheHeaders);
 
+        // WebSockets are not supported, so an upgrade is sent untouched (no token fetch, no Approov headers, no
+        // secure string substitution and no signature), so that nothing Approov issues travels on a connection
+        // the layer does not handle as an HTTP request
+        Attempt attempt = Attempt.first(request, cacheHeaders);
+        String upgrade = header(attempt.appHeaders, "Upgrade");
+        if (upgrade == null)
+            upgrade = header(cacheHeaders, "Upgrade");
+        if ("websocket".equalsIgnoreCase((upgrade != null) ? upgrade.trim() : null)) {
+            ApproovLog.d(TAG, "WebSocket upgrade to " + ApproovService.loggableHost(attempt.url)
+                    + " sent without Approov processing (not supported)");
+            return executeNetworkRequest(attempt.view, attempt.untouched().wireHeaders);
+        }
+
         // check if we are to proceed with any Approov processing, under the mutator in force when the layer
         // first processed the request, which governs all its attempts
         ApproovServiceMutator mutator = mutatorFor(request);
         Map<String, String> hookHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(cacheHeaders));
         if (!ApproovService.callMutator("handleRequestShouldProcess",
                 () -> mutator.handleRequestShouldProcess(request, hookHeaders)))
-            return sendUntouched(request, cacheHeaders);
+            return executeNetworkRequest(attempt.view, attempt.untouched().wireHeaders);
 
         // protect the request for its URL and send it, then follow any redirect, each hop protected for its own
         // URL
-        Attempt attempt = Attempt.first(request, cacheHeaders);
         Attempt sent = protect(attempt, mutator, true);
         int followUps = 0;
         while (true) {
