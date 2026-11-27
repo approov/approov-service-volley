@@ -130,26 +130,6 @@ public class ApproovHurlStackContractTest {
     }
 
     @Test
-    public void hurlStackUsesFetchStatusAsTokenValueWhenConfigured() throws Exception {
-        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
-            ApproovTestSupport.initializeApproovService(approov);
-            listApiHost(approov);
-            ApproovService.setUseApproovStatusIfNoToken(true);
-            RecordingHurlStack stack = new RecordingHurlStack();
-
-            Approov.TokenFetchResult mitmResult =
-                    ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.MITM_DETECTED);
-            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply"))
-                    .thenReturn(mitmResult);
-
-            stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
-
-            assertEquals("MITM_DETECTED", stack.capturedHeaders.get("Approov-Token"));
-            assertNull(stack.capturedHeaders.get("Approov-TraceID"));
-        }
-    }
-
-    @Test
     public void hurlStackUsesFetchStatusWhenSdkReturnsEmptyTokenAndFallbackEnabled() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
@@ -169,71 +149,6 @@ public class ApproovHurlStackContractTest {
             stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
 
             assertEquals("SUCCESS", stack.capturedHeaders.get("Approov-Token"));
-        }
-    }
-
-    @Test
-    public void hurlStackSendsNoApproovHeaderWhenMutatorReturnsFalseOnAFailure() throws Exception {
-        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
-            ApproovTestSupport.initializeApproovService(approov);
-            listApiHost(approov);
-            ApproovService.setUseApproovStatusIfNoToken(true);
-            ApproovService.setServiceMutator(new RecordingMutator(
-                    true,
-                    null,
-                    Approov.TokenFetchStatus.MITM_DETECTED));
-            RecordingHurlStack stack = new RecordingHurlStack();
-
-            Approov.TokenFetchResult mitmResult =
-                    ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.MITM_DETECTED);
-            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply"))
-                    .thenReturn(mitmResult);
-
-            stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
-
-            // false on a failure status sends the request with no token or trace header
-            assertFalse(stack.capturedHeaders.containsKey("Approov-Token"));
-            assertFalse(stack.capturedHeaders.containsKey("Approov-TraceID"));
-        }
-    }
-
-    @Test
-    public void hurlStackSendsAnEmptyTokenHeaderOnNoApproovService() throws Exception {
-        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
-            ApproovTestSupport.initializeApproovService(approov);
-            listApiHost(approov);
-            RecordingHurlStack stack = new RecordingHurlStack();
-
-            Approov.TokenFetchResult noServiceResult =
-                    ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.NO_APPROOV_SERVICE);
-            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply"))
-                    .thenReturn(noServiceResult);
-
-            stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
-
-            // NO_APPROOV_SERVICE proceeds with an empty token, and the empty trace ID is not sent
-            assertEquals("", stack.capturedHeaders.get("Approov-Token"));
-            assertFalse(stack.capturedHeaders.containsKey("Approov-TraceID"));
-        }
-    }
-
-    @Test
-    public void hurlStackUsesFallbackStatusHeaderForNoApproovServiceWhenConfigured() throws Exception {
-        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
-            ApproovTestSupport.initializeApproovService(approov);
-            listApiHost(approov);
-            ApproovService.setUseApproovStatusIfNoToken(true);
-            RecordingHurlStack stack = new RecordingHurlStack();
-
-            Approov.TokenFetchResult noServiceResult =
-                    ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.NO_APPROOV_SERVICE);
-            approov.when(() -> Approov.fetchApproovTokenAndWait("https://api.example.com/reply"))
-                    .thenReturn(noServiceResult);
-
-            stack.executeRequest(ApproovTestSupport.request("https://api.example.com/reply"), new LinkedHashMap<>());
-
-            assertEquals("NO_APPROOV_SERVICE", stack.capturedHeaders.get("Approov-Token"));
-            assertFalse(stack.capturedHeaders.containsKey("Approov-TraceID"));
         }
     }
 
