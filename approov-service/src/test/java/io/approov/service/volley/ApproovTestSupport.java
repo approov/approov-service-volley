@@ -27,7 +27,8 @@ final class ApproovTestSupport {
     static void resetApproovServiceState() {
         setStaticField("hurlStack", null);
         setStaticField("isInitialized", false);
-        setStaticField("configString", null);
+        setStaticField("approovProtectionEnabled", false);
+        setStaticField("lastARC", "");
         setStaticField("useApproovStatusIfNoToken", false);
         setStaticField("approovTokenHeader", null);
         setStaticField("approovTokenPrefix", null);

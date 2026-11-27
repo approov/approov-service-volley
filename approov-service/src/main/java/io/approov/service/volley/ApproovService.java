@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.PatternSyntaxException;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -69,12 +70,15 @@ public class ApproovService {
     // alternative http stack to be used that adds token and pinning, or null if could not be initialized
     private static ApproovHurlStack hurlStack = null;
 
-    // true if the service layer has been successfully initialized
+    // true if the service layer has been successfully initialized, bypass mode included
     private static boolean isInitialized = false;
 
-    // configuration string used for the current initialization
-    private static String configString = null;
+    // true if the Approov SDK has been initialized by this layer with a non-empty account ID. The account ID
+    // is not kept, as the SDK is the only judge of a repeat call.
+    private static boolean approovProtectionEnabled = false;
 
+    // the ARC of the most recent token, secure string or custom JWT fetch, or empty
+    private static String lastARC = "";
 
     // true if the fetch status should be sent as the Approov token header value
     // when a request is allowed to proceed but no real token is available
@@ -106,55 +110,71 @@ public class ApproovService {
     }
 
     /**
-     * Initializes the ApproovService with an account configuration and comment.
+     * Initializes the ApproovService with an Approov account ID and comment. A non-empty account ID is always
+     * passed to the Approov SDK with the comment unchanged and the SDK decides: a repeat with the same account
+     * ID and comment returns at once, while anything else the SDK rejects is thrown unchanged with the service
+     * state untouched. An empty account ID enables the service in bypass mode, without Approov protection,
+     * and is ignored once protection is enabled. Each initialization that is not ignored resets the
+     * configuration to its defaults (headers, exclusions, the service mutator, and so any message signing),
+     * so make any configuration calls after initialize.
      *
-     * @param context the Application context
-     * @param config  the configuration string, or empty for no SDK initialization
-     * @param comment the comment string, or null for no comment
+     * @param context is the Application context
+     * @param config is your Approov account ID, or an empty string for bypass mode with no SDK initialization
+     * @param comment is the comment passed to the SDK unchanged, or null for no comment
+     * @throws IllegalArgumentException if the context or account ID is null, or the SDK rejects the account ID
+     * @throws IllegalStateException if the SDK is already initialized with a different account ID or comment
      */
     public static synchronized void initialize(Context context, String config, String comment) {
+        if (context == null)
+            throw new IllegalArgumentException("initialize: null context");
         if (config == null)
             throw new IllegalArgumentException("config must not be null; pass \"\" for bypass mode");
 
-        // If we are already initialized with a valid config, ignore any subsequent
-        // empty config initialization
-        if (isApproovEnabled() && config.isEmpty()) {
-            ApproovLog.i(TAG, "initialize: empty config ignored, Approov protection already enabled");
+        if (config.isEmpty()) {
+            if (approovProtectionEnabled) {
+                // an empty account ID never downgrades active Approov protection and is not passed to the SDK
+                ApproovLog.i(TAG, "initialize: empty config ignored, Approov protection already enabled");
+            } else {
+                ApproovLog.i(TAG, "initialize: bypass mode, Approov protection not active");
+                resetConfiguration();
+                isInitialized = true;
+            }
             return;
         }
 
-        // Check if we are already initialized to prevent runtime config mismatch
-        if (isInitialized) {
-            boolean isUpgrade = configString.isEmpty() && !config.isEmpty();
-            if (!isUpgrade) {
-                if (!config.equals(configString)) {
-                    throw new IllegalStateException("ApproovService already initialized with a different config");
-                }
-            }
+        // pass every non-empty account ID to the SDK with the comment exactly as given, as the SDK is the
+        // only judge of a repeat call and any exception it throws reaches the caller with the state untouched
+        boolean newlyInitialized;
+        try {
+            newlyInitialized = Approov.initialize(context.getApplicationContext(), config, "auto", comment);
+        } catch (RuntimeException e) {
+            ApproovLog.e(TAG, "initialize: Approov SDK failed: " + e);
+            throw e;
         }
-
-        // Initialize the platform SDK if not in bypass mode (empty config).
-        // State is only modified after the SDK confirms success, preserving the current
-        // operating mode (protected or bypass) if the call fails.
-        if (!config.isEmpty()) {
+        boolean protectionWasEnabled = approovProtectionEnabled;
+        resetConfiguration();
+        isInitialized = true;
+        approovProtectionEnabled = true;
+        if (newlyInitialized)
+            ApproovLog.i(TAG, "initialize: Approov protection enabled");
+        else
+            ApproovLog.d(TAG, "initialize: Approov SDK already initialized with the same config and comment");
+        if (!protectionWasEnabled) {
             try {
-                boolean sdkInitialized = Approov.initialize(context.getApplicationContext(), config, "auto", comment);
-                if (!sdkInitialized) {
-                    ApproovLog.d(TAG, "Approov SDK already initialized");
-                }
-            } catch (IllegalArgumentException e) {
-                ApproovLog.e(TAG, "Approov initialization failed: " + e.getMessage());
-                throw e; // service-layer state NOT modified — prior operating mode preserved
-            } catch (IllegalStateException e) {
-                ApproovLog.e(TAG, "Approov initialization failed: " + e.getMessage());
-                throw e; // service-layer state NOT modified — prior operating mode preserved
+                Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION);
+            } catch (RuntimeException e) {
+                // the property is diagnostic only and must not fail a successful initialization
+                ApproovLog.e(TAG, "initialize: Approov user property not set: " + e);
             }
-            Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION);
         }
-        // SDK succeeded (or bypass) — now reset and commit new service-layer state.
-        hurlStack = null;
-        isInitialized = false;
-        configString = null;
+    }
+
+    /**
+     * Resets the configuration to its defaults, as each initialization does. The logging level is kept.
+     */
+    private static synchronized void resetConfiguration() {
+        lastARC = "";
+        hurlStack = new ApproovHurlStack();
         approovTokenHeader = APPROOV_TOKEN_HEADER;
         approovTokenPrefix = APPROOV_TOKEN_PREFIX;
         approovTraceIDHeader = APPROOV_TRACE_ID_HEADER;
@@ -162,14 +182,6 @@ public class ApproovService {
         useApproovStatusIfNoToken = false;
         exclusionURLRegexs = new HashMap<>();
         serviceMutator = ApproovServiceMutator.DEFAULT;
-        // create an alternative hurlstack to use
-        hurlStack = new ApproovHurlStack();
-        isInitialized = true;
-        configString = config;
-        if (config.isEmpty())
-            ApproovLog.i(TAG, "initialize: bypass mode, Approov protection not active");
-        else
-            ApproovLog.i(TAG, "initialize: Approov protection enabled");
     }
 
     /**
@@ -181,27 +193,6 @@ public class ApproovService {
     public static void initialize(Context context, String config) {
         // default uses null comment
         initialize(context, config, null);
-    }
-
-    /**
-     * Sets a flag indicating if the network interceptor should proceed anyway if it is
-     * not possible to obtain an Approov token due to a networking failure.
-     *
-     * @param proceed is true if Approov networking fails should allow continuation
-     * @deprecated Use an ApproovServiceMutator to override standard fallback behavior.
-     * This method is retained for compatibility but does nothing.
-     */
-    @Deprecated
-    public static synchronized void setProceedOnNetworkFail(boolean proceed) {
-        ApproovLog.d(TAG, "setProceedOnNetworkFail is deprecated and does nothing.");
-    }
-
-    /**
-     * @deprecated Always returns false.
-     */
-    @Deprecated
-    static synchronized boolean getProceedOnNetworkFail() {
-        return false;
     }
 
     /**
@@ -227,23 +218,46 @@ public class ApproovService {
     }
 
     /**
-     * Indicates whether the service layer has been initialized.
+     * Determines if the ApproovService is enabled, which is true once any initialize has succeeded,
+     * including bypass mode with an empty account ID. Before that, requests made through the stack are
+     * sent without Approov processing.
      *
-     * @return true if it has been initialized, false otherwise
+     * @return true if the service has been enabled by a successful initialize, false otherwise
      */
-    public static synchronized boolean isInitialized() {
+    public static synchronized boolean isApproovServiceEnabled() {
         return isInitialized;
     }
 
     /**
-     * Indicates whether Approov protection is enabled for this service layer
-     * instance. If initialization used an empty config string then the layer is
-     * initialized but Approov protection is bypassed.
+     * Determines if Approov protection is enabled, which is true once the Approov SDK has been initialized
+     * by a successful initialize with a non-empty account ID. It is false before initialization and in
+     * bypass mode, where requests are sent without Approov processing.
+     *
+     * @return true if the Approov SDK is initialized and requests are protected, false otherwise
+     */
+    public static synchronized boolean isApproovProtectionEnabled() {
+        return isInitialized && approovProtectionEnabled;
+    }
+
+    /**
+     * Indicates whether the service layer has been initialized, bypass mode included. This is the same as
+     * isApproovServiceEnabled().
+     *
+     * @return true if the service layer has been initialized, false otherwise
+     */
+    public static synchronized boolean isInitialized() {
+        return isApproovServiceEnabled();
+    }
+
+    /**
+     * Indicates whether Approov protection is enabled for this service layer instance. If initialization
+     * used an empty account ID then the layer is initialized but Approov protection is bypassed. This is
+     * the same as isApproovProtectionEnabled().
      *
      * @return true if Approov protection is enabled, false otherwise
      */
     public static synchronized boolean isApproovEnabled() {
-        return isInitialized && (configString != null) && !configString.isEmpty();
+        return isApproovProtectionEnabled();
     }
 
     /**
@@ -253,7 +267,9 @@ public class ApproovService {
     static synchronized void reset() {
         hurlStack = null;
         isInitialized = false;
-        configString = null;
+        approovProtectionEnabled = false;
+        lastARC = "";
+        messageSignatureDeprecationLogged.set(false);
         useApproovStatusIfNoToken = false;
         approovTokenHeader = null;
         approovTokenPrefix = null;
@@ -307,15 +323,14 @@ public class ApproovService {
     }
 
     /**
-     * Sets the header that the Approov token is added on, as well as an optional
-     * prefix String (such as "Bearer "). By default the token is provided on
-     * "Approov-Token" with no prefix.
+     * Sets the header that the Approov token is added on, as well as an optional prefix String (such as
+     * "Bearer "). By default the token is provided on "Approov-Token" with no prefix.
      *
      * @param header is the header to place the Approov token on
-     * @param prefix is any prefix String for the Approov token header
+     * @param prefix is any prefix String for the Approov token header, or null for none
      */
-    public static synchronized void setApproovHeader(String header, String prefix) {
-        ApproovLog.d(TAG, "setApproovHeader " + header + ", " + prefix);
+    public static synchronized void setTokenHeader(String header, String prefix) {
+        ApproovLog.d(TAG, "setTokenHeader " + header + ", " + prefix);
         approovTokenHeader = header;
         // A null prefix is equivalent to no prefix (empty string). Storing null here would later
         // concatenate the literal string "null" in front of the token, producing a malformed
@@ -324,32 +339,31 @@ public class ApproovService {
     }
 
     /**
-     * Gets the Approov token header.
+     * Gets the header that is used to add the Approov token.
      *
-     * @return header to place the Approov token on
+     * @return String of the header used for the Approov token
      */
-    static synchronized String getApproovHeader() {
+    public static synchronized String getTokenHeader() {
         return approovTokenHeader;
     }
 
-
     /**
-     * Gets the Approov token header value prefix.
+     * Gets the prefix that is added before the Approov token in the header.
      *
-     * @return prefix to add to the Approov token header value
+     * @return String of the prefix added before the Approov token
      */
-    static synchronized String getApproovPrefix() {
+    public static synchronized String getTokenPrefix() {
         return approovTokenPrefix;
     }
 
     /**
-     * Sets the header name that is used to pass any optional Approov TraceID debug value.
-     * Passing null disables the header.
+     * Sets the header name that is used to pass any optional Approov TraceID debug value. Passing null
+     * disables the header.
      *
      * @param header is the name of the header on which to place the Approov TraceID, or null to disable it
      */
-    public static synchronized void setApproovTraceIDHeader(String header) {
-        ApproovLog.d(TAG, "setApproovTraceIDHeader " + header);
+    public static synchronized void setTraceIDHeader(String header) {
+        ApproovLog.d(TAG, "setTraceIDHeader " + header);
         approovTraceIDHeader = header;
     }
 
@@ -358,8 +372,33 @@ public class ApproovService {
      *
      * @return the header name used for the Approov TraceID, or null if disabled
      */
-    static synchronized String getApproovTraceIDHeader() {
+    public static synchronized String getTraceIDHeader() {
         return approovTraceIDHeader;
+    }
+
+    /**
+     * Sets the header that the Approov token is added on, as well as an optional prefix String.
+     * Deprecated: use setTokenHeader instead.
+     *
+     * @param header is the header to place the Approov token on
+     * @param prefix is any prefix String for the Approov token header, or null for none
+     * @deprecated Use setTokenHeader.
+     */
+    @Deprecated
+    public static void setApproovHeader(String header, String prefix) {
+        setTokenHeader(header, prefix);
+    }
+
+    /**
+     * Sets the header that any optional Approov TraceID debug value is added on.
+     * Deprecated: use setTraceIDHeader instead.
+     *
+     * @param header is the header to place the Approov TraceID on, or null to disable the header
+     * @deprecated Use setTraceIDHeader.
+     */
+    @Deprecated
+    public static void setApproovTraceIDHeader(String header) {
+        setTraceIDHeader(header);
     }
 
     /**
@@ -503,18 +542,6 @@ public class ApproovService {
         return new HashMap<>(exclusionURLRegexs);
     }
 
-    /**
-     * Previously started a background token fetch to lower the latency of a subsequent fetch.
-     *
-     * @deprecated The Approov SDK starts its own initialization fetch when it is initialized, so a
-     * service layer should not fetch on its own. This method is retained for compatibility but
-     * does nothing.
-     */
-    @Deprecated
-    public static synchronized void prefetch() {
-        ApproovLog.d(TAG, "prefetch is deprecated and does nothing.");
-    }
-
     // Performs a precheck to determine if the app will pass attestation. This requires secure
     // strings to be enabled for the account, although no strings need to be set up. This will
     // likely require network access so may take some time to complete. It may throw ApproovException
@@ -532,7 +559,7 @@ public class ApproovService {
         // try and fetch a non-existent secure string in order to check for a rejection
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchSecureStringAndWait("precheck-dummy-key", null);
+            approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait("precheck-dummy-key", null));
             ApproovLog.d(TAG, "precheck: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
@@ -616,7 +643,7 @@ public class ApproovService {
         // fetch the Approov token
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchApproovTokenAndWait(url);
+            approovResults = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
             ApproovLog.d(TAG, "fetchToken: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
@@ -642,10 +669,17 @@ public class ApproovService {
      * @param message is the message whose content is to be signed
      * @return String of the base64 encoded message signature
      * @throws ApproovException if there was a problem
+     * @deprecated Use getAccountMessageSignature. The first call logs a deprecation warning.
      */
+    @Deprecated
     public static String getMessageSignature(String message) throws ApproovException {
+        if (messageSignatureDeprecationLogged.compareAndSet(false, true))
+            ApproovLog.w(TAG, "getMessageSignature is deprecated: use getAccountMessageSignature");
         return getAccountMessageSignature(message);
     }
+
+    // true once the deprecation warning of getMessageSignature has been logged
+    private static final AtomicBoolean messageSignatureDeprecationLogged = new AtomicBoolean();
 
     /**
      * Gets the account message signature for the given message.
@@ -730,7 +764,7 @@ public class ApproovService {
         // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchSecureStringAndWait(key, newDef);
+            approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(key, newDef));
             ApproovLog.d(TAG, "fetchSecureString " + type + ": " + key + ", " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
@@ -763,7 +797,7 @@ public class ApproovService {
         // fetch the custom JWT catching any exceptions the SDK might throw
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchCustomJWTAndWait(payload);
+            approovResults = fetchRecording(() -> Approov.fetchCustomJWTAndWait(payload));
             ApproovLog.d(TAG, "fetchCustomJWT: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
@@ -778,51 +812,59 @@ public class ApproovService {
     }
 
     /**
-     * Gets the last ARC (Attestation Response Code) code.
+     * Gets the Attestation Response Code (ARC) from the most recent token, secure string or custom JWT
+     * fetch made by this layer, either for a request or by a direct method. It performs no fetch of its
+     * own, so it can be read after a rejected request to correlate with your backend API. An empty string
+     * is returned if no fetch has been made, if the last fetch carried no ARC or failed without a result,
+     * or if ARC is not enabled for the account. Note that it is preferable to obtain the ARC on the server
+     * side where possible.
      *
-     * Always resolves with a string (ARC or empty string).
-     * NOTE: You MUST only call this method upon succesfull attestation completion. Any networking
-     * errors returned from the service layer will not return a meaningful ARC code if the method is called!!!
-     * @return String ARC from last attestation request or empty string if network unavailable
+     * @return the ARC of the most recent fetch, or an empty string
      */
-    public static String getLastARC() {
-        if (!isApproovEnabled()) {
-            ApproovLog.e(TAG, "getLastARC: SDK not initialized");
-            return "";
-        }
-        // Get the dynamic pins from Approov
-        Map<String, List<String>> approovPins = Approov.getPins("public-key-sha256");
-        if (approovPins == null || approovPins.isEmpty()) {
-            ApproovLog.e(TAG, "ApproovService: no host pinning information available");
-            return "";
-        }
-        // The approovPins contains a map of hostnames to pin strings. Skip '*' and use another hostname if available.
-        String hostname = null;
-        for (String key : approovPins.keySet()) {
-            if (!"*".equals(key)) {
-                hostname = key;
-                break;
-            }
-        }
-        if (hostname != null) {
-            try {
-                Approov.TokenFetchResult result = Approov.fetchApproovTokenAndWait(hostname);
-                if (result.getToken() != null && !result.getToken().isEmpty()) {
-                    String arc = result.getARC();
-                    if (arc != null) {
-                        return arc;
-                    }
-                }
-                ApproovLog.i(TAG, "ApproovService: ARC code unavailable");
-                return "";
-            } catch (Exception e) {
-                ApproovLog.e(TAG, "ApproovService: error fetching ARC", e);
-                return "";
-            }
-        } else {
-            ApproovLog.i(TAG, "ApproovService: ARC code unavailable");
-            return "";
-        }
+    public static synchronized String getLastARC() {
+        return lastARC;
+    }
+
+    /**
+     * Records the ARC of a fetch result as the most recent one. An empty or null ARC clears the previous
+     * value, as the ARC belongs to the last fetch.
+     *
+     * @param approovResults is the fetch result, or null if the fetch failed without a result
+     * @return the fetch result passed in
+     */
+    static synchronized Approov.TokenFetchResult recordLastARC(Approov.TokenFetchResult approovResults) {
+        String arc = (approovResults != null) ? approovResults.getARC() : null;
+        lastARC = (arc != null) ? arc : "";
+        return approovResults;
+    }
+
+    // a fetch made by the SDK
+    interface SdkFetch {
+        Approov.TokenFetchResult fetch();
+    }
+
+    /**
+     * Performs a fetch with the SDK and records its ARC. A fetch that throws or returns no result leaves no
+     * ARC.
+     *
+     * @param fetch is the SDK call
+     * @return the fetch result
+     */
+    static Approov.TokenFetchResult fetchRecording(SdkFetch fetch) {
+        recordLastARC(null);
+        return recordLastARC(fetch.fetch());
+    }
+
+    /**
+     * Sets an install attributes token to be sent to the server and associated with this particular
+     * app installation for future Approov token fetches, as setInstallAttrsInToken does. This is the name
+     * shared by all Approov packages.
+     *
+     * @param attrs is the signed JWT holding the new install attributes
+     * @throws ApproovException if the attrs parameter is invalid or the SDK is not initialized
+     */
+    public static void setInstallAttributes(String attrs) throws ApproovException {
+        setInstallAttrsInToken(attrs);
     }
 
     /**
@@ -890,7 +932,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -909,8 +951,9 @@ public class ApproovService {
         if ((value != null) && value.startsWith(prefix) && (value.length() > prefix.length())) {
             // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
             Approov.TokenFetchResult approovResults;
+            final String secureStringKey = value.substring(prefix.length());
             try {
-                approovResults = Approov.fetchSecureStringAndWait(value.substring(prefix.length()), null);
+                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(secureStringKey, null));
                 ApproovLog.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus().toString());
             }
             catch (IllegalStateException e) {
@@ -952,7 +995,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -969,7 +1012,7 @@ public class ApproovService {
             // fetch any secure string keyed by the value, catching any exceptions the SDK might throw
             Approov.TokenFetchResult approovResults;
             try {
-                approovResults = Approov.fetchSecureStringAndWait(value, null);
+                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(value, null));
                 ApproovLog.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus().toString());
             }
             catch (IllegalStateException e) {
@@ -1011,7 +1054,7 @@ public class ApproovService {
         if (!isApproovEnabled()) return url;
         Approov.TokenFetchResult urlStatus;
         try {
-            urlStatus = Approov.fetchApproovTokenAndWait(url);
+            urlStatus = fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
         } catch (IllegalStateException e) {
             throw new ApproovException(e);
         } catch (IllegalArgumentException e) {
@@ -1031,7 +1074,7 @@ public class ApproovService {
             String queryValue = matcher.group(1);
             Approov.TokenFetchResult approovResults;
             try {
-                approovResults = Approov.fetchSecureStringAndWait(queryValue, null);
+                approovResults = fetchRecording(() -> Approov.fetchSecureStringAndWait(queryValue, null));
             }
             catch (IllegalStateException e) {
                 throw new ApproovException(e);
@@ -1176,7 +1219,7 @@ class ApproovHurlStack extends HurlStack {
         // request an Approov token for the domain
         Approov.TokenFetchResult approovResults;
         try {
-            approovResults = Approov.fetchApproovTokenAndWait(url);
+            approovResults = ApproovService.fetchRecording(() -> Approov.fetchApproovTokenAndWait(url));
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);
@@ -1193,19 +1236,19 @@ class ApproovHurlStack extends HurlStack {
             tokenHeaderValue = mutator.handleRequestTokenHeaderValue(approovResults, url);
         } else if (shouldSendFallbackStatusHeader(approovResults)) {
             tokenHeaderValue = ApproovService.getApproovTokenHeaderValueOrStatus(approovResults);
-            ApproovLog.d(TAG, "Proceeding with fallback token header " + ApproovService.getApproovHeader()
+            ApproovLog.d(TAG, "Proceeding with fallback token header " + ApproovService.getTokenHeader()
                     + ": " + tokenHeaderValue);
         } else {
             return executeNetworkRequest(request, headers);
         }
 
         if (tokenHeaderValue != null) {
-            String tokenHeader = ApproovService.getApproovHeader();
+            String tokenHeader = ApproovService.getTokenHeader();
             headers.put(tokenHeader, tokenHeaderValue);
             changes.setTokenHeaderKey(tokenHeader);
         }
 
-        String traceIDHeader = ApproovService.getApproovTraceIDHeader();
+        String traceIDHeader = ApproovService.getTraceIDHeader();
         String traceID = approovResults.getTraceID();
         if (traceIDHeader != null && traceID != null && !traceID.isEmpty()) {
             headers.put(traceIDHeader, traceID);

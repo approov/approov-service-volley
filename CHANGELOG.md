@@ -13,10 +13,21 @@ Entries marked **Breaking** need a source change.
 - A failed secure string fetch no longer fails the request under the standard mutators. The substitution is skipped and the request proceeds.
 - `NO_APPROOV_SERVICE` proceeds with the trace header, as a failure status does, where 3.5.x sent no Approov headers.
 - A token fetch that is rejected throws `ApproovFetchStatusException`, where 3.5.x threw `ApproovRejectionException`.
+- `initialize` passes every non-empty account ID and comment to the Approov SDK and the SDK decides, so the layer no longer compares account IDs itself. It resets the configuration each time, and throws `IllegalArgumentException` for a null context, also in bypass mode (`""`).
+- `getLastARC()` makes no token fetch of its own. It returns the ARC of the most recent token, secure string or custom JWT fetch, or an empty string.
+- `getMessageSignature(message)` is deprecated. Use `getAccountMessageSignature`.
+
+### Deprecated
+- `setApproovHeader` and `setApproovTraceIDHeader`. Use `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 
 ### Added
+- The names shared by all Approov packages: `isApproovServiceEnabled()`, `isApproovProtectionEnabled()`, `setInstallAttributes(String)`, `getTokenHeader()`, `getTokenPrefix()`, `getTraceIDHeader()`, `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 - `ApproovServiceMutator.CLOSE_FAILURE`, the default, which keeps the 3.5.x decisions, and `ALWAYS_PROCEED`, which never aborts a request on a token fetch failure.
 - `ApproovService.setLoggingLevel(ApproovLogLevel)`, `INFO` by default. `OFF` silences the layer, and debug logging for the `ApproovService` tag raises any other level to `DEBUG`. The loggable token is logged at `DEBUG` only, with the URL without its query, user info or fragment.
+
+### Removed
+- `setProceedOnNetworkFail(boolean)`, which had no effect in 3.5.x. Use `ALWAYS_PROCEED` or `setUseApproovStatusIfNoToken(true)`.
+- `prefetch()`. The SDK manages prefetching itself.
 
 ## [3.5.6] - 2026-10-07
 

@@ -94,7 +94,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackAddsApproovTokenTraceIdAndMutatorChangesOnSuccess() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
-            ApproovService.setApproovHeader("Approov-Token", "Bearer ");
+            ApproovService.setTokenHeader("Approov-Token", "Bearer ");
             RecordingMutator mutator = new RecordingMutator(true, "yes");
             ApproovService.setServiceMutator(mutator);
             RecordingHurlStack stack = new RecordingHurlStack();
@@ -226,7 +226,7 @@ public class ApproovHurlStackContractTest {
     public void hurlStackCanDisableTraceIdHeaderEvenWhenTheSdkProvidesOne() throws Exception {
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             ApproovTestSupport.initializeApproovService(approov);
-            ApproovService.setApproovTraceIDHeader(null);
+            ApproovService.setTraceIDHeader(null);
             RecordingHurlStack stack = new RecordingHurlStack();
 
             Approov.TokenFetchResult successResult = ApproovTestSupport.tokenResult(

@@ -48,7 +48,7 @@ public class ApproovServiceContractTest {
             assertNotNull(baseHttpStack);
             assertTrue(baseHttpStack instanceof ApproovHurlStack);
 
-            ApproovService.setApproovTraceIDHeader(null);
+            ApproovService.setTraceIDHeader(null);
             ApproovService.setUseApproovStatusIfNoToken(true);
 
             assertNull(ApproovTestSupport.getStaticField("approovTraceIDHeader", String.class));
@@ -105,7 +105,7 @@ public class ApproovServiceContractTest {
 
             assertNotNull(ApproovService.getBaseHttpStack());
             assertTrue(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
-            assertEquals("config-a", ApproovTestSupport.getStaticField("configString", String.class));
+            assertTrue(ApproovTestSupport.getStaticField("approovProtectionEnabled", Boolean.class));
             approov.verify(() -> Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION));
         }
     }
@@ -128,7 +128,7 @@ public class ApproovServiceContractTest {
             // Per TESTING_REQUIREMENTS §17-18: failure preserves the prior operating state.
             assertNotNull(ApproovService.getBaseHttpStack());
             assertTrue(ApproovTestSupport.getStaticField("isInitialized", Boolean.class));
-            assertEquals("config-a", ApproovTestSupport.getStaticField("configString", String.class));
+            assertTrue(ApproovTestSupport.getStaticField("approovProtectionEnabled", Boolean.class));
         }
     }
 
@@ -211,7 +211,7 @@ public class ApproovServiceContractTest {
 
     @Test
     public void getApproovTokenHeaderValueOrStatusUsesConfiguredPrefixWithFallbackStatusWhenTokenMissing() {
-        ApproovService.setApproovHeader("Approov-Token", "Bearer ");
+        ApproovService.setTokenHeader("Approov-Token", "Bearer ");
         Approov.TokenFetchResult failureResult = ApproovTestSupport.tokenResult(
                 Approov.TokenFetchStatus.MITM_DETECTED,
                 "",
