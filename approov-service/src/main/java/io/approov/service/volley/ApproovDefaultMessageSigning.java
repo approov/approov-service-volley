@@ -24,13 +24,11 @@ import android.util.Log;
 import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
 
-import io.approov.internal.volley.bouncycastle.asn1.ASN1InputStream;
-import io.approov.internal.volley.bouncycastle.asn1.ASN1Integer;
-import io.approov.internal.volley.bouncycastle.asn1.ASN1Sequence;
+import io.approov.util.volley.tink.subtle.EllipticCurves;
 
-import java.math.BigInteger;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -173,22 +171,27 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         removeHeaderIgnoreCase(headers, "Signature-Base-Digest");
     }
 
-    private static byte[] to32ByteArray(ASN1Integer bytesAsASN1Integer) {
-        BigInteger bytesAsBigInteger = bytesAsASN1Integer.getValue();
-        byte[] bytes = bytesAsBigInteger.toByteArray();
-        byte[] bytes32;
-        if (bytes.length < 32) {
-            bytes32 = new byte[32];
-            System.arraycopy(bytes, 0, bytes32, 32 - bytes.length, bytes.length);
-        } else if (bytes.length == 32) {
-            bytes32 = bytes;
-        } else if (bytes.length == 33 && bytes[0] == 0) {
-            bytes32 = new byte[32];
-            System.arraycopy(bytes, 1, bytes32, 0, 32);
-        } else {
-            throw new IllegalArgumentException("Not an ASN.1 DER ES256 signature part");
+    /**
+     * Converts an ASN.1 DER encoded ECDSA P-256 signature, as the SDK returns the install message signature,
+     * to the raw 64 byte r||s form that ecdsa-p256-sha256 requires. Only the canonical DER encoding of the
+     * result is accepted, since the Tink conversion does not check that r and s fit in 32 bytes.
+     *
+     * @param der is the DER encoded signature
+     * @return the raw r||s signature
+     * @throws IllegalArgumentException if der is not a canonical DER ES256 signature
+     */
+    static byte[] es256DerToRaw(byte[] der) {
+        byte[] raw;
+        byte[] canonical;
+        try {
+            raw = EllipticCurves.ecdsaDer2Ieee(der, 64);
+            canonical = EllipticCurves.ecdsaIeee2Der(raw);
+        } catch (GeneralSecurityException | RuntimeException e) {
+            throw new IllegalArgumentException("Not an ASN.1 DER ES256 signature: " + e, e);
         }
-        return bytes32;
+        if (!Arrays.equals(canonical, der))
+            throw new IllegalArgumentException("Not an ASN.1 DER ES256 signature: integer exceeds 32 bytes");
+        return raw;
     }
 
     /**
@@ -253,18 +256,8 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                         return originalHeaders;
                     }
                     signature = decodeBase64(base64);
-                    try (ASN1InputStream asn1InputStream = new ASN1InputStream(signature)) {
-                        Object obj = asn1InputStream.readObject();
-                        if (obj instanceof ASN1Sequence) {
-                            ASN1Sequence sequence = (ASN1Sequence) obj;
-                            byte[] rBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(0));
-                            byte[] sBytes = to32ByteArray((ASN1Integer) sequence.getObjectAt(1));
-                            signature = new byte[rBytes.length + sBytes.length];
-                            System.arraycopy(rBytes, 0, signature, 0, rBytes.length);
-                            System.arraycopy(sBytes, 0, signature, rBytes.length, sBytes.length);
-                        } else {
-                            throw new IllegalStateException("Not an ASN1Sequence");
-                        }
+                    try {
+                        signature = es256DerToRaw(signature);
                     } catch (Exception e) {
                         // Fail-open: a malformed install signature is logged and the request proceeds unsigned.
                         Log.e(TAG, "Failed to decode ASN.1 DER ES256 signature - proceeding unsigned: " + e, e);

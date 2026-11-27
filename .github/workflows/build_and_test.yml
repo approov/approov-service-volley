@@ -1,7 +1,5 @@
 name: Build and Test
 
-# push covers direct work on main while pull_request covers all PR branches,
-# avoiding duplicate runs for branches that have an open PR
 on:
   push:
     branches:
@@ -13,21 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       WORKSPACE: "${{ github.workspace }}"
       GIT_BRANCH: "${{ github.ref }}"
       CURRENT_TAG: "${{ github.ref_name }}"
-      # Worker endpoints: consumed from GitHub organisation variables.
-      # The verification step below fails fast if these variables are not
-      # defined, as no hardcoded fallback is provided for security.
-      # Worker management (create / redeploy) logic is centralized in the
-      # core-service-layers-testing script, but invoked here when needed.
+      # Worker endpoints: must be set as GitHub organisation or repository
+      # variables. No fallback is hardcoded here to avoid exposing endpoint
+      # URLs in the public repository. The workflow fails with a clear error
+      # if either variable is missing.
       TESTING_REPLY_URL: ${{ vars.TESTING_REPLY_URL }}
       TESTING_REPLY_URL_UNPROTECTED: ${{ vars.TESTING_REPLY_URL_UNPROTECTED }}
       # Required for the redeploy script invocation on failure
       CLOUDFLARE_API_TOKEN_WORKERS_DEV: ${{ secrets.CLOUDFLARE_API_TOKEN_WORKERS_DEV }}
       CLOUDFLARE_ACCOUNT_ID_WORKERS_DEV: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_WORKERS_DEV }}
-      CORE_SERVICE_LAYERS_TESTING_PAT: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT }}
 
     steps:
       # -----------------------------------------------------------------------
@@ -37,7 +32,7 @@ jobs:
         run: git config --global --add safe.directory '*'
 
       - name: Checkout approov-service-volley
-        uses: actions/checkout@v6
+        uses: actions/checkout@v5
         with:
           path: approov-service-volley
 
@@ -47,10 +42,12 @@ jobs:
       #    so both repos must sit under the same parent ($GITHUB_WORKSPACE).
       # -----------------------------------------------------------------------
       - name: Checkout core-service-layers-testing
-        if: ${{ env.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
-        uses: actions/checkout@v6
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        uses: actions/checkout@v5
         with:
           repository: approov/core-service-layers-testing
+          # this branch carries the test harness for this release line
+          ref: spec/okhttp-release-3.7.0
           token: ${{ secrets.CORE_SERVICE_LAYERS_TESTING_PAT }}
           path: core-service-layers-testing
 
@@ -60,16 +57,16 @@ jobs:
       #    URLs are resolved with the following precedence (mirrors the mini-sdk
       #    fallback logic in MiniAttesterConfig / Approov.m):
       #      1. GitHub org variable  (TESTING_REPLY_URL / _UNPROTECTED)
-      
+      #      2. Mini-SDK hardcoded defaults (the echo workers)
       #
       #    If the workers are unavailable, this step invokes the management
       #    script in core-service-layers-testing to redeploy them.
       # -----------------------------------------------------------------------
       - name: Verify worker endpoints
-        if: ${{ env.CORE_SERVICE_LAYERS_TESTING_PAT != '' }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         run: |
           # ── URL resolution ──────────────────────────────────────────────────
-          # URLs MUST be set as GitHub organisation or repository variables.
+          # URLs MUST be set as GitHub organisation/repository variables.
           # No hardcoded fallback is provided to avoid exposing endpoints
           # in the public repository.
           if [[ -z "$TESTING_REPLY_URL" || -z "$TESTING_REPLY_URL_UNPROTECTED" ]]; then
@@ -81,7 +78,7 @@ jobs:
 
           PROTECTED_URL="$TESTING_REPLY_URL"
           UNPROTECTED_URL="$TESTING_REPLY_URL_UNPROTECTED"
-          
+
           echo "TESTING_REPLY_URL=$PROTECTED_URL"       >> "$GITHUB_ENV"
           echo "TESTING_REPLY_URL_UNPROTECTED=$UNPROTECTED_URL" >> "$GITHUB_ENV"
 
@@ -159,6 +156,10 @@ jobs:
       - name: Build AAR
         working-directory: approov-service-volley
         run: ./gradlew assembleRelease
+
+      - name: Verify AAR contents and published POM
+        working-directory: approov-service-volley
+        run: ./gradlew verifyReleaseAar verifyPublishedPom
 
       - name: Run unit tests
         working-directory: approov-service-volley
@@ -306,58 +307,3 @@ jobs:
           name: test-results-${{ github.run_number }}
           path: approov-service-volley/approov-service/build/reports/tests/
           retention-days: 14
-
-  # ---------------------------------------------------------------------------
-  # Automatic release tagging (main only). Runs only after build-and-test
-  # passes, so a release is never tagged on a failing build. The CHANGELOG top
-  # entry drives a matching git tag, which triggers the Maven Publish workflow
-  # (build_and_publish.yml). The published AAR bakes the tag version into
-  # BuildConfig.APPROOV_SERVICE_VERSION (-PapproovServiceVersion), reported at
-  # runtime via Approov.setUserProperty. Skipped if the tag already exists.
-  # ---------------------------------------------------------------------------
-  tag-release:
-    needs: build-and-test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Extract Version from CHANGELOG
-        id: get-version
-        run: |
-          VERSION=$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | grep -oE '[0-9]+\.[0-9]+\.[0-9]+') || true
-          if [ -z "$VERSION" ]; then
-            echo "::error::Could not find a version header (## [x.y.z]) in CHANGELOG.md"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version extracted from CHANGELOG.md is: $VERSION"
-
-      - name: Create and Push Tag
-        run: |
-          VERSION="${{ steps.get-version.outputs.VERSION }}"
-
-          if git fetch origin "refs/tags/$VERSION" --quiet 2>/dev/null; then
-            echo "Tag $VERSION already exists. Skipping tagging."
-            exit 0
-          fi
-
-          echo "Tag $VERSION does not exist. Verifying dev placeholder..."
-          FILE="approov-service/build.gradle"
-          if ! grep -q "'approovServiceVersion') ?: 'dev'" "$FILE"; then
-            echo "::error::Could not find default 'dev' version in $FILE"
-            exit 1
-          fi
-
-          echo "Configuring git..."
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          echo "Creating and pushing tag $VERSION..."
-          git tag "$VERSION"
-          git push origin "$VERSION"
