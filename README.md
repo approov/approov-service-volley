@@ -180,11 +180,11 @@ To support message signing, this repo has adapted code released by two 3rd
 party developers. The LICENSE files have been copied from the repos into the
 associated directories listed below:
 
-* `approov-service/src/main/java/io/approov/util/http/sfv`
+* `approov-service/src/main/java/io/approov/util/volley/http/sfv`
     * Repo: https://github.com/reschke/structured-fields
     * Commit hash: d43f2ad6c655b92a7ef52aafa763418e1c6fed78
     * License: Apache V2
-* `approov-service/src/main/java/io/approov/util/sig`
+* `approov-service/src/main/java/io/approov/util/volley/sig`
     * Repo: https://github.com/bspk/httpsig-java
     * Commit hash: ffe86ae1d07425f13b018329f51c7a7c0833d71f
     * License: MIT
