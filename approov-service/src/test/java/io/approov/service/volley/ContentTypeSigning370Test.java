@@ -179,4 +179,47 @@ public class ContentTypeSigning370Test {
         RecordedRequest get = send(new BodyRequest(Request.Method.GET, origin + "/get", null, null));
         assertFalse(get.getHeader("Signature-Input").contains("\"content-type\""));
     }
+
+    // the quoted component identifiers of a Signature-Input value, in order
+    private static java.util.List<String> components(String signatureInput) {
+        java.util.List<String> found = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"([^\"]+)\"").matcher(signatureInput);
+        while (m.find()) {
+            found.add(m.group(1));
+        }
+        return found;
+    }
+
+    @Test
+    public void aRepeatedOptionalHeaderIsCoveredOnce() throws Exception {
+        useFactory(ApproovDefaultMessageSigning.generateDefaultSignatureParametersFactory()
+                .addOptionalHeaders("Content-Type", "content-type", "Authorization"));
+        RecordedRequest recorded = send(new BodyRequest(Request.Method.POST, origin + "/dup", "{}",
+                "application/json; charset=utf-8").header("Authorization", "Bearer abc"));
+        java.util.List<String> covered = components(recorded.getHeader("Signature-Input"));
+        assertEquals(recorded.getHeader("Signature-Input"), 1, java.util.Collections.frequency(covered, "content-type"));
+        assertEquals(recorded.getHeader("Signature-Input"), 1, java.util.Collections.frequency(covered, "authorization"));
+        assertEquals(new java.util.LinkedHashSet<>(covered).size(), covered.size());
+        // the default factory adds Authorization, then Content-Type; the repeats change nothing
+        assertTrue(covered.indexOf("authorization") < covered.indexOf("content-type"));
+        WireUrlSigning370Test.verifyInstallSignature(origin, recorded);
+    }
+
+    @Test
+    public void aBaseComponentAddedAgainIsCoveredOnce() throws Exception {
+        useFactory(new ApproovDefaultMessageSigning.SignatureParametersFactory()
+                .setBaseParameters(new SignatureParameters()
+                        .addComponentIdentifier(ComponentProvider.DC_METHOD)
+                        .addComponentIdentifier(ComponentProvider.DC_TARGET_URI)
+                        .addComponentIdentifier("Content-Type"))
+                .setUseInstallMessageSigning()
+                .setAddApproovTokenHeader(true)
+                .addOptionalHeaders("content-type"));
+        RecordedRequest recorded = send(new BodyRequest(Request.Method.POST, origin + "/base", "{}",
+                "application/json; charset=utf-8"));
+        java.util.List<String> covered = components(recorded.getHeader("Signature-Input"));
+        assertEquals(recorded.getHeader("Signature-Input"), 1, java.util.Collections.frequency(covered, "content-type"));
+        assertEquals(new java.util.LinkedHashSet<>(covered).size(), covered.size());
+        WireUrlSigning370Test.verifyInstallSignature(origin, recorded);
+    }
 }
