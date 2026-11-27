@@ -185,6 +185,79 @@ public class RequestClassification370Test {
         }
     }
 
+    // one row per token fetch status of every kind, under both standard decisions with a signer installed and
+    // the status in the token header off and on: what the token header, the signature headers and the
+    // placeholders of a header and a query parameter hold on the wire, with a secret at hand to show a leak
+    @Test
+    public void perStatusTokenTableCoversPlaceholdersAndSignatures() throws Exception {
+        final String placeholder = "api-key-placeholder";
+        final String secret = "real-api-key-value";
+        sdk.secureStrings.put(placeholder, MiniSdkHook.secureString(Approov.TokenFetchStatus.SUCCESS, secret));
+        ApproovService.addSubstitutionHeader("X-Secret", null);
+        ApproovService.addSubstitutionQueryParam("key");
+        ApproovServiceMutator[] decisions = {ApproovServiceMutator.CLOSE_FAILURE, ApproovServiceMutator.ALWAYS_PROCEED};
+        for (ApproovServiceMutator decision : decisions) {
+            for (boolean useStatus : new boolean[] {false, true}) {
+                for (Approov.TokenFetchStatus status : Approov.TokenFetchStatus.values()) {
+                    if (status == Approov.TokenFetchStatus.UNKNOWN_KEY)
+                        continue; // a secure string status only, never answered to a token fetch
+                    String what = decision + (useStatus ? " status on " : " status off ") + status;
+                    ApproovService.setServiceMutator(ApproovDefaultMessageSigning.combined(decision));
+                    ApproovService.setUseApproovStatusIfNoToken(useStatus);
+                    sdk.answerTokens(status, (status == Approov.TokenFetchStatus.SUCCESS) ? "jwt-token" : null,
+                            "trace-" + status);
+                    int secureStringFetches = sdk.count("fetchSecureStringAndWait");
+                    boolean failure = failureStatuses().contains(status);
+                    boolean network = ApproovServiceMutator.isNetworkFailure(status);
+                    boolean aborts = failure && (decision == ApproovServiceMutator.CLOSE_FAILURE)
+                            && (status != Approov.TokenFetchStatus.NO_APPROOV_SERVICE) && !(network && useStatus);
+                    MiniSdkHttpsOrigins.AppRequest app = new MiniSdkHttpsOrigins.AppRequest(
+                            origins.firstUrl("/data") + "?key=" + placeholder).header("X-Secret", placeholder);
+                    if (aborts) {
+                        int before = origins.first.getRequestCount();
+                        try {
+                            origins.send(app);
+                            fail(what + ": must abort");
+                        } catch (ApproovFetchStatusException expected) {
+                            assertSame(what, status, expected.getTokenFetchStatus());
+                        }
+                        assertEquals(what + ": nothing sent", before, origins.first.getRequestCount());
+                        assertEquals(what + ": no secure string fetched", secureStringFetches,
+                                sdk.count("fetchSecureStringAndWait"));
+                        continue;
+                    }
+                    RecordedRequest recorded = sendFirst(app);
+                    boolean secrets = (status == Approov.TokenFetchStatus.SUCCESS)
+                            || (status == Approov.TokenFetchStatus.UNPROTECTED_URL);
+                    boolean token = (status == Approov.TokenFetchStatus.SUCCESS) || failure;
+                    // the placeholders: the secret on a protected channel, as the app wrote them anywhere else
+                    String value = secrets ? secret : placeholder;
+                    assertEquals(what + ": header", value, recorded.getHeader("X-Secret"));
+                    assertEquals(what + ": query", value, recorded.getRequestUrl().queryParameter("key"));
+                    assertEquals(what + ": secure strings fetched", secrets, sdk.count("fetchSecureStringAndWait")
+                            > secureStringFetches);
+                    // the token header and the trace header
+                    String expectedToken = (status == Approov.TokenFetchStatus.SUCCESS) ? "jwt-token"
+                            : (failure ? (useStatus ? status.name() : "") : null);
+                    assertEquals(what + ": token header", expectedToken, recorded.getHeader("Approov-Token"));
+                    assertEquals(what + ": trace header", token ? "trace-" + status : null,
+                            recorded.getHeader("Approov-TraceID"));
+                    assertNull(what, recorded.getHeader("Approov-Status"));
+                    // the signature covers the token header where there is one, and is absent otherwise
+                    if (token) {
+                        String input = recorded.getHeader("Signature-Input");
+                        assertNotNull(what + ": Signature-Input", input);
+                        assertNotNull(what + ": Signature", recorded.getHeader("Signature"));
+                        assertTrue(what + ": " + input, input.contains("\"approov-token\""));
+                    } else {
+                        assertNull(what + ": Signature-Input", recorded.getHeader("Signature-Input"));
+                        assertNull(what + ": Signature", recorded.getHeader("Signature"));
+                    }
+                }
+            }
+        }
+    }
+
     @Test
     public void aProceedingFailureIsSignedOverTheTokenHeaderAsSent() throws Exception {
         ApproovService.setServiceMutator(ApproovDefaultMessageSigning.combined(ApproovServiceMutator.ALWAYS_PROCEED));
