@@ -102,6 +102,12 @@ final class ApproovTestSupport {
         }
     }
 
+    // sets whether Approov protection is enabled, without the SDK, for a check that needs it
+    static void setProtectionEnabled(boolean enabled) {
+        setStaticField("isInitialized", enabled);
+        setStaticField("approovProtectionEnabled", enabled);
+    }
+
     private static void setStaticField(String name, Object value) {
         try {
             Field field = ApproovService.class.getDeclaredField(name);

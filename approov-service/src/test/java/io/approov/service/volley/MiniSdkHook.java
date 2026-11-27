@@ -45,6 +45,14 @@ class MiniSdkHook implements MiniSdkCallHook {
     // the pin set the SDK reports, or null to let the mini-SDK answer
     volatile Map<String, List<String>> pins;
 
+    // the answer to a pin set read, consulted before pins, which may return null or throw as the SDK might
+    volatile PinsAnswer pinsAnswer;
+
+    // the answer to a pin set read
+    interface PinsAnswer {
+        Map<String, List<String>> pins();
+    }
+
     // the answer to a token fetch
     interface TokenAnswer {
         Approov.TokenFetchResult fetch(String url);
@@ -105,6 +113,9 @@ class MiniSdkHook implements MiniSdkCallHook {
             }
             case "getPins": {
                 calls.add(method + ":" + args[0]);
+                PinsAnswer pinsAnswer = this.pinsAnswer;
+                if (pinsAnswer != null)
+                    return pinsAnswer.pins();
                 Map<String, List<String>> answer = pins;
                 return (answer != null) ? answer : sdk.proceed(args);
             }

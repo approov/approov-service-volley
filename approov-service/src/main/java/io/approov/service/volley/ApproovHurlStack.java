@@ -40,6 +40,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLPeerUnverifiedException;
 
 /**
  * Alternative HurlStack to be used for Approov that adds Approov tokens and pinning. This overrides certain
@@ -146,6 +147,8 @@ class ApproovHurlStack extends HurlStack {
             HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
             PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
             httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
+            if (attempt != null)
+                attempt.verifier = pinningHostnameVerifier;
 
             // The HostnameVerifier (and therefore the live-pin check) only runs during the TLS
             // handshake of a NEW connection, never when HttpURLConnection reuses a pooled
@@ -257,9 +260,20 @@ class ApproovHurlStack extends HurlStack {
     private HttpResponse send(Attempt sent, boolean followsInLayer, boolean pinned)
             throws IOException, AuthFailureError {
         AttemptConnection previous = sending.get();
-        sending.set(new AttemptConnection(followsInLayer, pinned));
+        AttemptConnection connection = new AttemptConnection(followsInLayer, pinned);
+        sending.set(connection);
         try {
             return executeNetworkRequest(sent.view, sent.wireHeaders);
+        } catch (IOException e) {
+            // a connection the Approov pins rejected fails with the platform pinning exception, which names the
+            // host and never a pin, whatever exception the platform raised for the rejected host
+            PinningHostnameVerifier verifier = connection.verifier;
+            SSLPeerUnverifiedException failure = (verifier != null) ? verifier.failure() : null;
+            if ((failure == null) || (failure == e))
+                throw e;
+            if (failure.getCause() == null)
+                failure.initCause(e);
+            throw failure;
         } finally {
             if (previous == null)
                 sending.remove();
@@ -908,6 +922,8 @@ class ApproovHurlStack extends HurlStack {
         final boolean followsInLayer;
         // true if Approov pinning applies to the connection
         final boolean pinned;
+        // the pinning verifier of the connection, once it is created
+        volatile PinningHostnameVerifier verifier;
 
         AttemptConnection(boolean followsInLayer, boolean pinned) {
             this.followsInLayer = followsInLayer;

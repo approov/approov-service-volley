@@ -21,10 +21,6 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLog;
 
-import java.security.MessageDigest;
-import java.security.PublicKey;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -51,7 +47,7 @@ public class LoggingLevelTest {
 
     // a distinctive line logged at each level
     private static final String ERROR_LINE = "getDeviceID: SDK not initialized";
-    private static final String WARNING_LINE = "Pinning rejection for";
+    private static final String WARNING_LINE = "no pins and no managed trust roots, OS trust only";
     private static final String INFO_LINE = "initialize: bypass mode";
     private static final String DEBUG_LINE = "setBindingHeader Probe-Binding";
 
@@ -88,31 +84,34 @@ public class LoggingLevelTest {
         return false;
     }
 
-    // causes a pin mismatch, which is logged as a warning
-    private static void pinMismatch() throws Exception {
+    // the number of hosts warned of, so that each warning names a new host
+    private static int warnedHosts = 0;
+
+    // causes the warning for an Approov domain with no pins and no managed trust roots, once for a new host,
+    // with Approov protection enabled only while the pins are checked
+    private static void osTrustOnlyWarning() throws Exception {
+        String host = "api-" + (++warnedHosts) + ".example.com";
         try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
             approov.when(() -> Approov.getPins("public-key-sha256")).thenReturn(Collections.singletonMap(
-                    "api.example.com", Collections.singletonList(
-                            java.util.Base64.getEncoder().encodeToString(
-                                    MessageDigest.getInstance("SHA-256").digest(new byte[]{1})))));
-            PublicKey publicKey = mock(PublicKey.class);
-            when(publicKey.getEncoded()).thenReturn(new byte[]{2});
-            X509Certificate certificate = mock(X509Certificate.class);
-            when(certificate.getPublicKey()).thenReturn(publicKey);
+                    host, Collections.<String>emptyList()));
             SSLSession session = mock(SSLSession.class);
-            when(session.getPeerCertificates()).thenReturn(new Certificate[]{certificate});
             HostnameVerifier delegate = mock(HostnameVerifier.class);
             when(delegate.verify(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any()))
                     .thenReturn(true);
-            assertFalse(new PinningHostnameVerifier(delegate).verify("api.example.com", session));
+            ApproovTestSupport.setProtectionEnabled(true);
+            try {
+                assertTrue(new PinningHostnameVerifier(delegate).verify(host, session));
+            } finally {
+                ApproovTestSupport.setProtectionEnabled(false);
+            }
         }
     }
 
-    // logs one line at each level: an error (a direct method before initialization), a warning (a pin
-    // mismatch), a debug line, then an information line (bypass mode initialization)
+    // logs one line at each level: an error (a direct method before initialization), a warning (an Approov
+    // domain with no pins), a debug line, then an information line (bypass mode initialization)
     private void logOneLineAtEachLevel() throws Exception {
         assertThrows(ApproovException.class, ApproovService::getDeviceID);
-        pinMismatch();
+        osTrustOnlyWarning();
         ApproovService.setBindingHeader("Probe-Binding");
         ApproovService.initialize(ApproovTestSupport.mockContext(), "");
     }

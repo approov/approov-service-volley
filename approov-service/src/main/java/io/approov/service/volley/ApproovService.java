@@ -32,13 +32,8 @@ import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.Certificate;
-import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,13 +45,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.PatternSyntaxException;
-
-import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.HostnameVerifier;
-import javax.net.ssl.SSLException;
-import javax.net.ssl.SSLSession;
-
-import android.util.Base64;
 
 // ApproovService provides a mediation layer to the Approov SDK itself
 public class ApproovService {
@@ -564,6 +552,7 @@ public class ApproovService {
     @VisibleForTesting
     static synchronized void reset() {
         ApproovHurlStack.forgetRequestMutators();
+        PinningHostnameVerifier.resetWarnings();
         hurlStack = null;
         isInitialized = false;
         approovProtectionEnabled = false;
@@ -1616,97 +1605,5 @@ public class ApproovService {
             }
         }
         return replacementURL;
-    }
-}
-
-/**
- * Performs pinning for use with HttpsUrlConnection. This implementation of HostnameVerifier is
- * intended to enhance the HostnameVerifier your TLS implementation normally uses. The
- * HostnameVerifier passed into the constructor continues to be executed when verify is called. The
- * is only applied if the usual HostnameVerifier first passes (so this implementation can only be
- * more secure). This pins to the SHA256 of the public key hash of any certificate in the trust
- * chain for the host (so technically this is public key rather than certificate pinning). Note that
- * this uses the current live Approov pins so is immediately updated if there is a configuration
- * update to the app.
- */
-final class PinningHostnameVerifier implements HostnameVerifier {
-    // Tag for log messages
-    private static final String TAG = "ApproovPinVerifier";
-
-    // HostnameVerifier you would normally be using
-    private final HostnameVerifier delegate;
-
-    /**
-     * Construct a PinningHostnameVerifier which delegates
-     * the initial verify to a user defined HostnameVerifier before
-     * applying pinning on top.
-     *
-     * @param delegate is the HostnameVerifier to apply before the custom pinning
-     */
-    public PinningHostnameVerifier(HostnameVerifier delegate) {
-        this.delegate = delegate;
-    }
-
-    @Override
-    public boolean verify(String hostname, SSLSession session) {
-        // check the delegate function first and only proceed if it passes
-        if (delegate.verify(hostname, session)) try {
-            // extract the set of valid pins for the hostname
-            Set<String> hostPins = new HashSet<>();
-            Map<String, List<String>> allPins = Approov.getPins("public-key-sha256");
-            List<String> pins = allPins.get(hostname);
-            if ((pins != null) && pins.isEmpty())
-                // if there are no pins associated with the hostname domain then we use any pins
-                // associated with the "*" domain for managed trust roots (note we do not
-                // apply this to domains that are not added at all)
-                pins = allPins.get("*");
-            if (pins != null) {
-                // convert the list of pins into a set
-                for (String pin: pins)
-                    hostPins.add(pin);
-            }
-
-            // if there are no pins then we accept any certificate
-            if (hostPins.isEmpty())
-                return true;
-
-            // check to see if any of the pins are in the certificate chain
-            for (Certificate cert: session.getPeerCertificates()) {
-                if (cert instanceof X509Certificate) {
-                    X509Certificate x509Cert = (X509Certificate) cert;
-                    String hash = sha256Base64(x509Cert.getPublicKey().getEncoded());
-                    if (hostPins.contains(hash))
-                        return true;
-                }
-                else
-                    ApproovLog.e(TAG, "Certificate not X.509");
-            }
-
-            // the connection is rejected
-            ApproovLog.w(TAG, "Pinning rejection for " + hostname);
-            return false;
-        } catch (SSLException e) {
-            ApproovLog.e(TAG, "Delegate Exception");
-            throw new RuntimeException(e);
-        }
-        return false;
-    }
-
-    /**
-     * Computes the base64-encoded SHA-256 of the given bytes, matching the Approov
-     * "public-key-sha256" pin form. Uses the platform MessageDigest/Base64 so the service layer
-     * carries no third-party dependency purely for pin hashing.
-     *
-     * @param data the bytes to hash (a certificate's encoded public key)
-     * @return the base64 (no-wrap) SHA-256 digest
-     */
-    private static String sha256Base64(byte[] data) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
-            return Base64.encodeToString(digest, Base64.NO_WRAP);
-        } catch (NoSuchAlgorithmException e) {
-            // SHA-256 is guaranteed available on every Android platform; a failure here is fatal.
-            throw new IllegalStateException("SHA-256 algorithm not available", e);
-        }
     }
 }
