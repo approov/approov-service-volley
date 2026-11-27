@@ -22,10 +22,12 @@ import android.util.Base64;
 
 import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
+import com.criticalblue.approovsdk.Approov;
 
 import io.approov.util.volley.tink.subtle.EllipticCurves;
 
-import java.net.URI;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -33,13 +35,16 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.approov.util.volley.http.sfv.ByteSequenceItem;
 import io.approov.util.volley.http.sfv.Dictionary;
+import io.approov.util.volley.http.sfv.ListElement;
 import io.approov.util.volley.sig.ComponentProvider;
 import io.approov.util.volley.sig.SignatureBaseBuilder;
 import io.approov.util.volley.sig.SignatureParameters;
@@ -70,25 +75,163 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      */
     public static final String ALG_HS256 = "hmac-sha256";
 
-    protected SignatureParametersFactory defaultFactory;
-    protected final Map<String, SignatureParametersFactory> hostFactories;
+    /**
+     * The Signature dictionary member name for the install message signature.
+     */
+    public static final String SIG_ID_INSTALL = "install";
 
     /**
-     * Constructs a new message signing mutator.
+     * The Signature dictionary member name for the account message signature.
+     */
+    public static final String SIG_ID_ACCOUNT = "account";
+
+    // the factory used for every host without a factory of its own, or null to sign nothing, which is
+    // volatile as it is read on the request threads; protected so that subclasses can read and set it
+    protected volatile SignatureParametersFactory defaultFactory;
+
+    // factories for individual hosts, keyed by the lowercase host name without any port; protected so that
+    // subclasses can read and change them
+    protected final Map<String, SignatureParametersFactory> hostFactories = new ConcurrentHashMap<>();
+
+    // true once a missing install signature, a missing account signature, and a request left unsigned for
+    // want of any signature have been logged at a visible level, after which they are logged at debug level
+    private static final AtomicBoolean installMissingLogged = new AtomicBoolean();
+    private static final AtomicBoolean accountMissingLogged = new AtomicBoolean();
+    private static final AtomicBoolean unsignedLogged = new AtomicBoolean();
+
+    // clears the once per process flags of the missing signature logs
+    static void resetMissingSignatureLogsForTesting() {
+        installMissingLogged.set(false);
+        accountMissingLogged.set(false);
+        unsignedLogged.set(false);
+    }
+
+    // the mutator whose decisions the signer makes, or null for the interface default decisions
+    private final ApproovServiceMutator decisions;
+
+    /**
+     * Constructs a new message signing mutator with no factory, so that nothing is signed until a default
+     * factory or a host factory is set. Install it with ApproovService.setServiceMutator.
      */
     public ApproovDefaultMessageSigning() {
-        hostFactories = new HashMap<>();
+        decisions = null;
+    }
+
+    /**
+     * Constructs a message signing service mutator with no factory that makes the decisions of another
+     * mutator, such as ApproovServiceMutator.ALWAYS_PROCEED or your own. Every decision hook calls the hook of
+     * that mutator. The processed headers hook calls the processed headers hook of that mutator first and
+     * then signs the result, so that the signature covers any change that mutator makes. Nothing is signed
+     * until a default factory or a host factory is set. Apps use combined(ApproovServiceMutator) to get a
+     * signer.
+     *
+     * @param decisions is the mutator whose decisions are to be made
+     * @throws IllegalArgumentException if decisions is null
+     */
+    ApproovDefaultMessageSigning(ApproovServiceMutator decisions) {
+        if (decisions == null)
+            throw new IllegalArgumentException("decisions must not be null");
+        this.decisions = decisions;
+    }
+
+    /**
+     * Gets a new message signing service mutator that adds both the install and the account signature to
+     * every request carrying the Approov token header, and makes the decisions of the given mutator, such as
+     * ApproovServiceMutator.CLOSE_FAILURE, ApproovServiceMutator.ALWAYS_PROCEED or your own. A signature that
+     * cannot be produced is left out and the request goes ahead with the other one, or unsigned. Install it
+     * with ApproovService.setServiceMutator.
+     *
+     * @param decisions is the mutator whose decisions are to be made
+     * @return a new signer with the default factory set to sign with both signatures
+     * @throws IllegalArgumentException if decisions is null
+     */
+    public static ApproovDefaultMessageSigning combined(ApproovServiceMutator decisions) {
+        return new ApproovDefaultMessageSigning(decisions).setDefaultFactory(
+                generateDefaultSignatureParametersFactory().setUseInstallAndAccountMessageSigning());
+    }
+
+    /**
+     * Gets a new message signing service mutator that adds both the install and the account signature and
+     * makes the ApproovServiceMutator.DEFAULT decisions. See combined(ApproovServiceMutator).
+     *
+     * @return a new signer with the default factory set to sign with both signatures
+     */
+    public static ApproovDefaultMessageSigning combined() {
+        return combined(ApproovServiceMutator.DEFAULT);
     }
 
     @Override
     public String toString() {
-        return "ApproovDefaultMessageSigning";
+        if (decisions == null)
+            return "ApproovDefaultMessageSigning";
+        return "ApproovDefaultMessageSigning(" + decisions + ")";
     }
 
     /**
-     * Sets the default factory for generating signature parameters.
+     * Gets the mutator whose decisions the signer makes.
      *
-     * @param factory the factory to set as the default
+     * @return the mutator given to the constructor, or CLOSE_FAILURE, whose decisions are the interface
+     * defaults, for the signer constructed with no argument
+     */
+    private ApproovServiceMutator decisions() {
+        return (decisions != null) ? decisions : ApproovServiceMutator.CLOSE_FAILURE;
+    }
+
+    @Override
+    public void handlePrecheckResult(Approov.TokenFetchResult approovResults) throws ApproovException {
+        decisions().handlePrecheckResult(approovResults);
+    }
+
+    @Override
+    public void handleFetchTokenResult(Approov.TokenFetchResult approovResults) throws ApproovException {
+        decisions().handleFetchTokenResult(approovResults);
+    }
+
+    @Override
+    public void handleFetchSecureStringResult(Approov.TokenFetchResult approovResults, String operation, String key)
+            throws ApproovException {
+        decisions().handleFetchSecureStringResult(approovResults, operation, key);
+    }
+
+    @Override
+    public void handleFetchCustomJWTResult(Approov.TokenFetchResult approovResults) throws ApproovException {
+        decisions().handleFetchCustomJWTResult(approovResults);
+    }
+
+    @Override
+    public boolean handleRequestShouldProcess(Request<?> request, Map<String, String> additionalHeaders)
+            throws ApproovException {
+        return decisions().handleRequestShouldProcess(request, additionalHeaders);
+    }
+
+    @Override
+    public boolean handleRequestFetchTokenResult(Approov.TokenFetchResult approovResults, String url)
+            throws ApproovException {
+        return decisions().handleRequestFetchTokenResult(approovResults, url);
+    }
+
+    @Override
+    public String handleRequestTokenHeaderValue(Approov.TokenFetchResult approovResults, String url)
+            throws ApproovException {
+        return decisions().handleRequestTokenHeaderValue(approovResults, url);
+    }
+
+    @Override
+    public boolean handleRequestHeaderSubstitutionResult(Approov.TokenFetchResult approovResults, String header)
+            throws ApproovException {
+        return decisions().handleRequestHeaderSubstitutionResult(approovResults, header);
+    }
+
+    @Override
+    public boolean handleRequestQueryParamSubstitutionResult(Approov.TokenFetchResult approovResults,
+            String queryKey) throws ApproovException {
+        return decisions().handleRequestQueryParamSubstitutionResult(approovResults, queryKey);
+    }
+
+    /**
+     * Sets the factory used for every host without a factory of its own.
+     *
+     * @param factory the factory to set as the default, or null to sign nothing for such hosts
      * @return the current instance for chaining
      */
     public ApproovDefaultMessageSigning setDefaultFactory(SignatureParametersFactory factory) {
@@ -99,24 +242,46 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     /**
      * Associates a specific host with a signature parameters factory.
      *
-     * @param hostName the host name
-     * @param factory the factory to associate with the host
+     * @param hostName the host name, matched without regard to case and without any port
+     * @param factory the factory to associate with the host, or null to use the default factory again
      * @return the current instance for chaining
      */
     public ApproovDefaultMessageSigning putHostFactory(String hostName, SignatureParametersFactory factory) {
-        this.hostFactories.put(hostName, factory);
+        if (hostName == null)
+            throw new IllegalArgumentException("hostName must not be null");
+        String key = hostName.toLowerCase(Locale.ROOT);
+        if (factory == null)
+            hostFactories.remove(key);
+        else
+            hostFactories.put(key, factory);
         return this;
     }
 
+    /**
+     * Selects the factory for a request, which is the factory of its host if there is one or otherwise
+     * the default factory.
+     *
+     * @param provider the component provider for the request
+     * @return the factory, or null if none applies
+     */
+    private SignatureParametersFactory factoryFor(VolleyComponentProvider provider) {
+        SignatureParametersFactory factory = hostFactories.get(provider.getHost().toLowerCase(Locale.ROOT));
+        return (factory != null) ? factory : defaultFactory;
+    }
+
+    /**
+     * Builds the signature parameters for a request from the factory for its host, or the default factory.
+     * A subclass may override this to choose or adjust the parameters per request.
+     *
+     * @param provider the component provider for the request
+     * @param changes the mutations applied to the request by Approov
+     * @return the signature parameters, or null if the request is not to be signed
+     */
     protected SignatureParameters buildSignatureParameters(VolleyComponentProvider provider,
             ApproovRequestMutations changes) {
-        SignatureParametersFactory factory = hostFactories.get(provider.getAuthority());
-        if (factory == null) {
-            factory = defaultFactory;
-            if (factory == null) {
-                return null;
-            }
-        }
+        SignatureParametersFactory factory = factoryFor(provider);
+        if (factory == null)
+            return null;
         return factory.buildSignatureParameters(provider, changes);
     }
 
@@ -194,23 +359,44 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     }
 
     /**
-     * Adds message signing headers to requests that already received an Approov token.
+     * Adds message signing headers to requests that already received an Approov token. The processed headers
+     * hook of the mutator whose decisions the signer makes is called first, so that the signature covers any
+     * change it makes.
      * <p>
-     * Message signing is fail-open. If a signature cannot be produced — for either install
-     * (ES256) or account (HS256) signing, e.g. the signature is unavailable/empty or an
-     * ASN.1/base64 decode fails — the failure is logged at error level and the request
-     * proceeds unsigned. The only fail-closed cases are an unsupported signing algorithm and a
-     * body digest configured as required that cannot be generated; both raise an
-     * {@code ApproovException}. The backend remains the enforcement point for message signatures.
+     * Message signing is fail-open. If a signature cannot be produced, for either install (ES256) or account
+     * (HS256) signing, because it is unavailable or empty or an ASN.1/base64 decode fails, it is left out
+     * and the request is signed with the other one, or sent unsigned if neither can be produced. The only
+     * fail-closed cases are an unsupported signing algorithm and a body digest configured as required that
+     * cannot be generated; both raise an {@code ApproovException}. The backend remains the enforcement point
+     * for message signatures.
      */
     @Override
     public Map<String, String> handleRequestProcessedHeaders(Request<?> request, Map<String, String> headers,
+            ApproovRequestMutations changes) throws ApproovException {
+        // the decisions make their changes before signing, and an exception they throw is theirs rather than a
+        // signing decision
+        Map<String, String> processed = decisions().handleRequestProcessedHeaders(request, headers, changes);
+        if (processed == null)
+            return null;
+        return sign(request, processed, changes);
+    }
+
+    private Map<String, String> sign(Request<?> request, Map<String, String> headers,
             ApproovRequestMutations changes) throws ApproovException {
         if (changes == null || changes.getTokenHeaderKey() == null) {
             return headers;
         }
 
-        VolleyComponentProvider provider = new VolleyComponentProvider(request, headers);
+        VolleyComponentProvider provider;
+        try {
+            provider = new VolleyComponentProvider(request, headers);
+        } catch (RuntimeException e) {
+            // Fail-open: a request whose parts cannot be read is sent unsigned
+            ApproovLog.e(TAG, "Message signing: failed to read the request, proceeding unsigned: " + e);
+            Map<String, String> unsigned = new LinkedHashMap<>(headers);
+            removeSignatureHeaders(unsigned);
+            return unsigned;
+        }
         Map<String, String> originalHeaders = new LinkedHashMap<>(provider.getHeaders());
         boolean hadContentDigest = provider.hasField("Content-Digest");
 
@@ -229,69 +415,87 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             return originalHeaders;
         }
 
-        // Everything below is fail-open: any failure to obtain, decode, or serialize a signature logs
-        // at error level and proceeds unsigned. The single exception is an unsupported algorithm, which
-        // is thrown as ApproovException (checked, so it is NOT caught by the fail-open RuntimeException
-        // handler and propagates to abort the request).
+        // Everything below is fail-open: any failure to obtain, decode, or serialize a signature leaves that
+        // signature out. The single exception is an unsupported algorithm, which is thrown as
+        // ApproovException (checked, so it is NOT caught by the fail-open RuntimeException handler and
+        // propagates to abort the request).
         try {
-            String message = new SignatureBaseBuilder(params, provider).createSignatureBase();
-
-            String sigId;
-            byte[] signature;
-            switch (params.getAlg()) {
-                case ALG_ES256: {
-                    sigId = "install";
-                    String base64;
-                    try {
-                        base64 = getInstallMessageSignature(message);
-                    } catch (ApproovException e) {
-                        ApproovLog.e(TAG, "Install message signature unavailable - proceeding unsigned: " + e);
-                        removeSignatureHeaders(originalHeaders);
-                        return originalHeaders;
-                    }
-                    if (base64.isEmpty()) {
-                        ApproovLog.e(TAG, "Install message signature empty - proceeding unsigned");
-                        removeSignatureHeaders(originalHeaders);
-                        return originalHeaders;
-                    }
-                    signature = decodeBase64(base64);
-                    try {
-                        signature = es256DerToRaw(signature);
-                    } catch (Exception e) {
-                        // Fail-open: a malformed install signature is logged and the request proceeds unsigned.
-                        ApproovLog.e(TAG, "Failed to decode ASN.1 DER ES256 signature - proceeding unsigned: " + e, e);
-                        removeSignatureHeaders(originalHeaders);
-                        return originalHeaders;
-                    }
-                    break;
+            // determine the algorithms to sign with, which is a single algorithm if the factory sets one
+            // explicitly on the parameters, or otherwise the algorithms configured on the factory (by default
+            // the install signature only)
+            List<String> algs;
+            if (params.getAlg() != null) {
+                algs = Collections.singletonList(params.getAlg());
+            } else {
+                SignatureParametersFactory factory = factoryFor(provider);
+                try {
+                    // a factory with no algorithm enabled throws IllegalStateException here
+                    algs = (factory != null) ? factory.getAlgs() : Collections.singletonList(ALG_ES256);
+                } catch (RuntimeException e) {
+                    ApproovLog.e(TAG, "Message signing: no usable algorithm, proceeding unsigned: " + e);
+                    removeSignatureHeaders(originalHeaders);
+                    return originalHeaders;
                 }
-                case ALG_HS256: {
-                    sigId = "account";
-                    String base64;
-                    try {
-                        base64 = getAccountMessageSignature(message);
-                    } catch (ApproovException e) {
-                        ApproovLog.e(TAG, "Account message signature unavailable - proceeding unsigned: " + e);
-                        removeSignatureHeaders(originalHeaders);
-                        return originalHeaders;
-                    }
-                    if (base64.isEmpty()) {
-                        ApproovLog.e(TAG, "Account message signature empty - proceeding unsigned");
-                        removeSignatureHeaders(originalHeaders);
-                        return originalHeaders;
-                    }
-                    signature = decodeBase64(base64);
-                    break;
+                if (algs == null || algs.isEmpty()) {
+                    ApproovLog.e(TAG, "Message signing: no usable algorithm, proceeding unsigned: empty algorithm list");
+                    removeSignatureHeaders(originalHeaders);
+                    return originalHeaders;
                 }
-                default:
-                    // Unsupported algorithm fails closed.
-                    throw new ApproovException("Unsupported algorithm identifier: " + params.getAlg());
+            }
+            for (String alg : algs) {
+                // an unsupported algorithm is a configuration error and fails closed
+                if (!ALG_ES256.equals(alg) && !ALG_HS256.equals(alg))
+                    throw new ApproovException("Message signing: unsupported algorithm identifier: " + alg);
             }
 
-            String sigHeader = Dictionary.valueOf(Collections.singletonMap(
-                    sigId, ByteSequenceItem.valueOf(signature))).serialize();
-            String sigInputHeader = Dictionary.valueOf(Collections.singletonMap(
-                    sigId, params.toComponentValue())).serialize();
+            // generate a signature per algorithm over the same covered components, each with its own signature
+            // base since the base includes the algorithm
+            Map<String, ListElement<?>> signatures = new LinkedHashMap<>();
+            Map<String, ListElement<?>> signatureInputs = new LinkedHashMap<>();
+            Map<String, String> messages = new LinkedHashMap<>();
+            // the reason each signature that could not be produced is missing, by signature identifier
+            Map<String, String> missing = new LinkedHashMap<>();
+            for (String alg : algs) {
+                SignatureParameters algParams = new SignatureParameters(params).setAlg(alg);
+                // WARNING never log the message as it contains an Approov token which provides access to
+                // your API
+                String message = new SignatureBaseBuilder(algParams, provider).createSignatureBase();
+                String sigId = ALG_ES256.equals(alg) ? SIG_ID_INSTALL : SIG_ID_ACCOUNT;
+                byte[] signature = ALG_ES256.equals(alg) ? installSignature(message, missing)
+                        : accountSignature(message, missing);
+                if (signature == null) {
+                    // this signature could not be produced so we proceed with any other
+                    continue;
+                }
+                signatures.put(sigId, ByteSequenceItem.valueOf(signature));
+                signatureInputs.put(sigId, algParams.toComponentValue());
+                messages.put(sigId, message);
+            }
+            if (signatures.isEmpty()) {
+                StringBuilder line = new StringBuilder("Message signing: no signature produced, proceeding unsigned");
+                for (Map.Entry<String, String> entry : missing.entrySet())
+                    line.append(": ").append(entry.getKey()).append(" signature ").append(entry.getValue());
+                if (unsignedLogged.compareAndSet(false, true))
+                    ApproovLog.e(TAG, line.toString());
+                else
+                    ApproovLog.d(TAG, line.toString());
+                removeSignatureHeaders(originalHeaders);
+                return originalHeaders;
+            }
+            for (Map.Entry<String, String> entry : missing.entrySet()) {
+                String line = "Message signing: " + entry.getKey() + " signature " + entry.getValue()
+                        + ", signed without it";
+                AtomicBoolean logged = SIG_ID_INSTALL.equals(entry.getKey()) ? installMissingLogged : accountMissingLogged;
+                if (logged.compareAndSet(false, true))
+                    ApproovLog.w(TAG, line);
+                else
+                    ApproovLog.d(TAG, line);
+            }
+
+            // each signature is a Byte Sequence member of the same Signature and Signature-Input dictionaries,
+            // serialized as colon delimited base64 (for example install=:<base64>:)
+            String sigHeader = Dictionary.valueOf(signatures).serialize();
+            String sigInputHeader = Dictionary.valueOf(signatureInputs).serialize();
 
             Map<String, String> signedHeaders = new LinkedHashMap<>(provider.getHeaders());
             removeHeaderIgnoreCase(signedHeaders, "Signature");
@@ -310,26 +514,92 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             if (params.isDebugMode()) {
                 try {
                     MessageDigest digestBuilder = MessageDigest.getInstance("SHA-256");
-                    digestBuilder.reset();
-                    byte[] digest = digestBuilder.digest(message.getBytes(StandardCharsets.UTF_8));
-                    String digestHeader = Dictionary.valueOf(Collections.singletonMap(
-                            DIGEST_SHA256, ByteSequenceItem.valueOf(digest))).serialize();
-                    signedHeaders.put("Signature-Base-Digest", digestHeader);
+                    Map<String, ListElement<?>> digests = new LinkedHashMap<>();
+                    for (Map.Entry<String, String> entry : messages.entrySet()) {
+                        digestBuilder.reset();
+                        byte[] digest = digestBuilder.digest(entry.getValue().getBytes(StandardCharsets.UTF_8));
+                        digests.put(entry.getKey(), ByteSequenceItem.valueOf(digest));
+                    }
+                    signedHeaders.put("Signature-Base-Digest", Dictionary.valueOf(digests).serialize());
                     addedHeaderKeys.add("Signature-Base-Digest");
                 } catch (NoSuchAlgorithmException e) {
-                    ApproovLog.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
+                    ApproovLog.d(TAG, "Message signing: digest algorithm unavailable, no debug entry: " + e);
                 }
             }
 
             changes.setAddedHeaderKeys(addedHeaderKeys);
             return signedHeaders;
         } catch (RuntimeException e) {
-            // Fail-open: any other signing failure (signature-base component missing, base64 decode,
-            // serialization, etc.) is logged and the request proceeds unsigned. ApproovException is
+            // Fail-open: any other signing failure (signature-base component missing, URL that cannot be
+            // read, serialization, etc.) is logged and the request proceeds unsigned. ApproovException is
             // checked and is NOT caught here, so the unsupported-algorithm fail-closed path propagates.
             ApproovLog.e(TAG, "Message signing failed - proceeding unsigned: " + e, e);
             removeSignatureHeaders(originalHeaders);
             return originalHeaders;
+        }
+    }
+
+    /**
+     * Produces the install message signature over the given message as the raw 64 byte r||s value that
+     * ecdsa-p256-sha256 requires.
+     *
+     * @param message the signature base
+     * @param missing receives the reason if the signature is not available
+     * @return the signature bytes, or null if not available
+     */
+    private byte[] installSignature(String message, Map<String, String> missing) {
+        String base64;
+        try {
+            base64 = getInstallMessageSignature(message);
+        } catch (ApproovException e) {
+            missing.put(SIG_ID_INSTALL, "unavailable: " + e);
+            return null;
+        }
+        if (base64 == null || base64.isEmpty()) {
+            missing.put(SIG_ID_INSTALL, "unavailable");
+            return null;
+        }
+        byte[] signature;
+        try {
+            signature = decodeBase64(base64);
+        } catch (RuntimeException e) {
+            missing.put(SIG_ID_INSTALL, "not base64: " + e);
+            return null;
+        }
+        // decode the signature from ASN.1 DER format
+        try {
+            return es256DerToRaw(signature);
+        } catch (RuntimeException e) {
+            missing.put(SIG_ID_INSTALL, "not ASN.1 DER ES256: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * Produces the account message signature over the given message, which may not be available as the
+     * account key is only delivered on a successful attestation.
+     *
+     * @param message the signature base
+     * @param missing receives the reason if the signature is not available
+     * @return the signature bytes, or null if not available
+     */
+    private byte[] accountSignature(String message, Map<String, String> missing) {
+        String base64;
+        try {
+            base64 = getAccountMessageSignature(message);
+        } catch (ApproovException e) {
+            missing.put(SIG_ID_ACCOUNT, "unavailable: " + e);
+            return null;
+        }
+        if (base64 == null || base64.isEmpty()) {
+            missing.put(SIG_ID_ACCOUNT, "unavailable");
+            return null;
+        }
+        try {
+            return decodeBase64(base64);
+        } catch (RuntimeException e) {
+            missing.put(SIG_ID_ACCOUNT, "not base64: " + e);
+            return null;
         }
     }
 
@@ -377,6 +647,10 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         protected SignatureParameters baseParameters = new SignatureParameters();
         protected String bodyDigestAlgorithm;
         protected boolean bodyDigestRequired;
+        // true to produce the install message signature (ECDSA P-256 with the per installation key)
+        protected boolean useInstallMessageSigning = true;
+        // true to produce the account message signature (HMAC-SHA256 with the account key), so that by
+        // default a bare factory produces the install signature only
         protected boolean useAccountMessageSigning;
         protected boolean addCreated;
         protected long expiresLifetime;
@@ -414,23 +688,56 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
         }
 
         /**
-         * Uses install message signing.
+         * Sets the factory to produce only the install message signature. This is the default of a newly
+         * constructed factory and of generateDefaultSignatureParametersFactory().
          *
          * @return the current instance for chaining
          */
         public SignatureParametersFactory setUseInstallMessageSigning() {
+            this.useInstallMessageSigning = true;
             this.useAccountMessageSigning = false;
             return this;
         }
 
         /**
-         * Uses account message signing.
+         * Sets the factory to produce only the account message signature.
          *
          * @return the current instance for chaining
          */
         public SignatureParametersFactory setUseAccountMessageSigning() {
+            this.useInstallMessageSigning = false;
             this.useAccountMessageSigning = true;
             return this;
+        }
+
+        /**
+         * Sets the factory to produce both the install and the account message signatures, as the members
+         * "install" and "account" of the same Signature and Signature-Input headers over the same covered
+         * components.
+         *
+         * @return the current instance for chaining
+         */
+        public SignatureParametersFactory setUseInstallAndAccountMessageSigning() {
+            this.useInstallMessageSigning = true;
+            this.useAccountMessageSigning = true;
+            return this;
+        }
+
+        /**
+         * Gets the signature algorithms configured on this factory, in the order the signatures are emitted.
+         *
+         * @return the algorithm identifiers
+         * @throws IllegalStateException if neither signature is enabled
+         */
+        public List<String> getAlgs() {
+            List<String> algs = new ArrayList<>(2);
+            if (useInstallMessageSigning)
+                algs.add(ALG_ES256);
+            if (useAccountMessageSigning)
+                algs.add(ALG_HS256);
+            if (algs.isEmpty())
+                throw new IllegalStateException("No message signing algorithm is enabled");
+            return algs;
         }
 
         /**
@@ -528,12 +835,9 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
 
         protected SignatureParameters buildSignatureParameters(VolleyComponentProvider provider,
                 ApproovRequestMutations changes) {
+            // the algorithm is left unset so that one signature per configured algorithm is produced over
+            // these same parameters, while a subclass may set an explicit algorithm for a single signature
             SignatureParameters requestParameters = new SignatureParameters(baseParameters);
-            if (useAccountMessageSigning) {
-                requestParameters.setAlg(ALG_HS256);
-            } else {
-                requestParameters.setAlg(ALG_ES256);
-            }
             if (addCreated || expiresLifetime > 0) {
                 long currentTime = ApproovService.signatureTimeMillis() / 1000;
                 if (addCreated) {
@@ -566,16 +870,18 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
     }
 
     /**
-     * ComponentProvider implementation for Volley requests.
+     * ComponentProvider implementation for Volley requests, deriving every component from the request URL
+     * string exactly as the stack sends it, and never parsing it with java.net.URI, which encodes some
+     * characters differently and rejects some URLs the stack sends. The URL is read with java.net.URL, as
+     * the stack does.
      * <p>
-     * Note that some derived components deliberately deviate from a strict reading of
-     * RFC 9421 so that all Approov service layers produce identical signature bases for
-     * the Approov verifier:
+     * Some derived components deliberately deviate from a strict reading of RFC 9421 so that all Approov
+     * service layers produce identical signature bases for the Approov verifier:
      * <ul>
-     * <li>{@code @authority} is the host only and never includes a port (RFC 9421
-     * section 2.2.3 includes non-default ports);</li>
-     * <li>{@code @target-uri} is the full request URL as provided to Volley, including
-     * any fragment (RFC 9421 section 2.2.2 excludes fragments);</li>
+     * <li>{@code @authority} is the lowercase host and a non-default port; a default port is left out
+     * (RFC 9421 section 2.2.3);</li>
+     * <li>{@code @target-uri} is the request URL as provided to Volley without any fragment, which is never
+     * sent, and without an explicit default port (RFC 9421 section 2.2.2);</li>
      * <li>{@code @query} has no leading {@code ?} and is unavailable when the URL has
      * no query (RFC 9421 section 2.2.7 includes the {@code ?} and uses {@code ?} alone
      * for an absent query).</li>
@@ -585,14 +891,15 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
      */
     protected static final class VolleyComponentProvider implements ComponentProvider {
         private final Request<?> request;
-        private final Uri androidUri;
-        private final URI javaUri;
+        private final String urlString;
         private final Map<String, String> headers;
+        // the parsed URL, read when a component needs it so that a URL that cannot be parsed only fails
+        // the components that use it
+        private URL parsedUrl;
 
         VolleyComponentProvider(Request<?> request, Map<String, String> headers) {
             this.request = request;
-            this.androidUri = Uri.parse(request.getUrl());
-            this.javaUri = URI.create(request.getUrl());
+            this.urlString = request.getUrl();
             this.headers = new LinkedHashMap<>();
             try {
                 Map<String, String> requestHeaders = request.getHeaders();
@@ -605,6 +912,28 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             if (headers != null) {
                 this.headers.putAll(headers);
             }
+        }
+
+        // gets the request URL as the stack reads it
+        private URL url() {
+            if (parsedUrl == null) {
+                try {
+                    parsedUrl = new URL(urlString);
+                } catch (MalformedURLException e) {
+                    throw new IllegalArgumentException("Request URL cannot be read: " + e.getMessage(), e);
+                }
+            }
+            return parsedUrl;
+        }
+
+        /**
+         * Gets the host of the request without any port, in lowercase, which is used to select a host
+         * factory. An IPv6 address keeps its brackets.
+         *
+         * @return the host of the request
+         */
+        String getHost() {
+            return url().getHost().toLowerCase(Locale.ROOT);
         }
 
         public Map<String, String> getHeaders() {
@@ -668,47 +997,89 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             }
         }
 
+        /**
+         * Gets the @authority derived component, which is the lowercase host, in brackets for an IPv6
+         * address, followed by the port only if it is not the default port of the scheme.
+         *
+         * @return the authority of the request
+         */
         @Override
         public String getAuthority() {
-            return javaUri.getHost();
+            URL url = url();
+            String authority = getHost();
+            if (url.getPort() != -1 && url.getPort() != url.getDefaultPort())
+                authority += ":" + url.getPort();
+            return authority;
         }
 
         @Override
         public String getScheme() {
-            return javaUri.getScheme();
+            return url().getProtocol();
         }
 
+        /**
+         * Gets the @target-uri derived component, which is the request URL as the stack sends it, leaving
+         * out any fragment as that is never sent, and any explicit default port (":443" for https and ":80"
+         * for http, the scheme being compared without regard to case). Nothing else changes, so the path,
+         * the query and their percent-encoding are as the app wrote them. An absent path is the root path,
+         * as the stack sends it.
+         *
+         * @return the target URI of the request
+         */
         @Override
         public String getTargetUri() {
-            return javaUri.toString();
+            URL url = url();
+            String text = urlString;
+            int fragment = text.indexOf('#');
+            if (fragment >= 0)
+                text = text.substring(0, fragment);
+
+            // the authority runs from after "://" to the first of "/", "?" or the end of the text
+            int authorityStart = text.indexOf("://") + 3;
+            int authorityEnd = text.length();
+            for (int i = authorityStart; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (c == '/' || c == '?') {
+                    authorityEnd = i;
+                    break;
+                }
+            }
+            String authority = text.substring(authorityStart, authorityEnd);
+            // an explicit port follows the last colon after any user info and any IPv6 address in brackets
+            int portColon = authority.lastIndexOf(':');
+            if (portColon > authority.lastIndexOf(']') && portColon > authority.lastIndexOf('@')
+                    && url.getPort() == url.getDefaultPort() && url.getPort() != -1)
+                authority = authority.substring(0, portColon);
+            String rest = text.substring(authorityEnd);
+            if (rest.isEmpty() || rest.charAt(0) == '?')
+                rest = "/" + rest;
+            return text.substring(0, authorityStart) + authority + rest;
         }
 
         @Override
         public String getRequestTarget() {
-            String requestTarget = "";
-            if (javaUri.getRawPath() != null) {
-                requestTarget += javaUri.getRawPath();
-            }
-            if (javaUri.getRawQuery() != null) {
-                requestTarget += "?" + javaUri.getRawQuery();
+            String requestTarget = getPath();
+            String query = url().getQuery();
+            if (query != null) {
+                requestTarget += "?" + query;
             }
             return requestTarget;
         }
 
         @Override
         public String getPath() {
-            String rawPath = javaUri.getRawPath();
-            return rawPath == null ? "" : rawPath;
+            String path = url().getPath();
+            return (path == null || path.isEmpty()) ? "/" : path;
         }
 
         @Override
         public String getQuery() {
-            return javaUri.getRawQuery();
+            return url().getQuery();
         }
 
         @Override
         public String getQueryParam(String name) {
-            List<String> values = androidUri.getQueryParameters(name);
+            List<String> values = Uri.parse(urlString).getQueryParameters(name);
             if (values.isEmpty()) {
                 throw new IllegalArgumentException("Could not find query parameter named " + name);
             } else if (values.size() > 1) {

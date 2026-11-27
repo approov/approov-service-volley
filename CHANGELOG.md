@@ -17,10 +17,16 @@ Entries marked **Breaking** need a source change.
 - `getLastARC()` makes no token fetch of its own. It returns the ARC of the most recent token, secure string or custom JWT fetch, or an empty string.
 - `getMessageSignature(message)` is deprecated. Use `getAccountMessageSignature`.
 
+- A missing install or account signature is logged as a warning once per process, and a request sent unsigned as an error once per process. Later occurrences are logged at debug level.
+- The signed `@target-uri` leaves out an explicit default port (`:443` for `https`, `:80` for `http`) and any `#fragment`, and the `@authority` is the lowercase host with a non-default port. The URL is no longer read with `java.net.URI`, so a URL it rejects, such as one with `|` in the query, is signed. A host factory is matched by host name without regard to case and without a port.
+- **Breaking:** `SignatureParametersFactory` has a new protected field, `useInstallMessageSigning`, which starts `true`, and its parameters no longer set the algorithm, as the signer produces one signature per algorithm the factory selects. A subclass that sets `useAccountMessageSigning = true` directly now produces both signatures. Call `setUseAccountMessageSigning()` to produce the account signature only.
+
 ### Deprecated
 - `setApproovHeader` and `setApproovTraceIDHeader`. Use `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 
 ### Added
+- `ApproovDefaultMessageSigning.combined()` and `combined(ApproovServiceMutator decisions)` give a signer that adds both the install and the account signature and makes the decisions you pass, for example `ApproovDefaultMessageSigning.combined(ApproovServiceMutator.ALWAYS_PROCEED)`.
+- Message signing can produce the account signature as well as the install signature: `SignatureParametersFactory.setUseInstallAndAccountMessageSigning()`.
 - `ApproovService.getServerAdjustedCurrentTimeMS()`, the current time corrected to the Approov servers' clock. Message signatures take their `created` and `expires` times from it. If the server time is not available the device clock is used and a warning is logged.
 - The names shared by all Approov packages: `isApproovServiceEnabled()`, `isApproovProtectionEnabled()`, `setInstallAttributes(String)`, `getTokenHeader()`, `getTokenPrefix()`, `getTraceIDHeader()`, `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
 - `ApproovServiceMutator.CLOSE_FAILURE`, the default, which keeps the 3.5.x decisions, and `ALWAYS_PROCEED`, which never aborts a request on a token fetch failure.
