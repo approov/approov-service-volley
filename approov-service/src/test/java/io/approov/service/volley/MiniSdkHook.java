@@ -139,13 +139,29 @@ class MiniSdkHook implements MiniSdkCallHook {
      */
     static Approov.TokenFetchResult result(Approov.TokenFetchStatus status, String token, String traceID,
             String secureString) {
+        return result(status, token, traceID, secureString, "ARC-" + status.name(), "");
+    }
+
+    /**
+     * Builds a fetch result as the SDK builds it, with the given ARC and rejection reasons.
+     *
+     * @param status is the fetch status
+     * @param token is the token, or null for none
+     * @param traceID is the trace ID, or null for none
+     * @param secureString is the secure string, or null for none
+     * @param arc is the ARC, or null for none
+     * @param reasons is the rejection reasons, or null for none
+     * @return the fetch result
+     */
+    static Approov.TokenFetchResult result(Approov.TokenFetchStatus status, String token, String traceID,
+            String secureString, String arc, String reasons) {
         try {
             java.lang.reflect.Constructor<Approov.TokenFetchResult> constructor =
                     Approov.TokenFetchResult.class.getDeclaredConstructor(Approov.TokenFetchStatus.class,
                             String.class, String.class, String.class, String.class, String.class,
                             boolean.class, boolean.class, byte[].class);
             constructor.setAccessible(true);
-            return constructor.newInstance(status, token, traceID, secureString, "ARC-" + status.name(), "",
+            return constructor.newInstance(status, token, traceID, secureString, arc, reasons,
                     false, false, null);
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("the mini-SDK TokenFetchResult constructor changed", e);
