@@ -552,26 +552,61 @@ class ApproovHurlStack extends HurlStack {
         }
     }
 
+    // the lock held while a request sets its token binding value and fetches its token
+    private static final Object BINDING_LOCK = new Object();
+
     /**
      * Fetches the token for an attempt, bound to the value of the token binding header if the request carries
-     * it.
+     * it. The SDK holds one binding value for the process, so setting the value and fetching the token are done
+     * under a lock, as otherwise two requests on different Volley network dispatcher threads binding different
+     * values could each get a token bound to the value of the other. Requests without a binding value fetch
+     * concurrently.
      *
-     * @param attempt is the attempt
+     * @param attempt is the attempt, which may carry the binding header
      * @return the fetch result, never null
      * @throws ApproovException if the SDK fails or returns no result
      */
     private static Approov.TokenFetchResult fetchToken(Attempt attempt) throws ApproovException {
+        String call = "fetchApproovTokenAndWait";
+        String url = attempt.url;
         String bindingHeader = ApproovService.getBindingHeader();
-        String bindingValue = (bindingHeader != null) ? attempt.appHeaders.get(bindingHeader) : null;
-        if (bindingValue != null) {
+        // header names are case-insensitive; a null value means the header is absent, while a present but
+        // empty value is still bound
+        String bindingValue = (bindingHeader != null) ? header(attempt.appHeaders, bindingHeader) : null;
+        if (bindingValue == null)
+            return fetchForRequest(call, () -> Approov.fetchApproovTokenAndWait(url));
+
+        // set the binding value and fetch the token, holding the lock across the two SDK calls only
+        Approov.TokenFetchResult approovResults = null;
+        RuntimeException bindingFailure = null;
+        RuntimeException fetchFailure = null;
+        synchronized (BINDING_LOCK) {
             try {
                 Approov.setDataHashInToken(bindingValue);
             } catch (RuntimeException e) {
-                ApproovService.recordLastARC(null);
-                throw ApproovService.sdkFailure("setDataHashInToken", e);
+                bindingFailure = e;
+            }
+            if (bindingFailure == null) {
+                try {
+                    approovResults = Approov.fetchApproovTokenAndWait(url);
+                } catch (RuntimeException e) {
+                    fetchFailure = e;
+                }
             }
         }
-        return fetchForRequest("fetchApproovTokenAndWait", () -> Approov.fetchApproovTokenAndWait(attempt.url));
+
+        // report any failure once the lock is released
+        if (bindingFailure != null) {
+            ApproovService.recordLastARC(null);
+            throw ApproovService.sdkFailure("setDataHashInToken", bindingFailure);
+        }
+        Approov.TokenFetchResult results = approovResults;
+        RuntimeException failure = fetchFailure;
+        return fetchForRequest(call, () -> {
+            if (failure != null)
+                throw failure;
+            return results;
+        });
     }
 
     /**
