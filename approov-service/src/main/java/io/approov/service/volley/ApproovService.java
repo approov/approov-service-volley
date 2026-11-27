@@ -563,6 +563,7 @@ public class ApproovService {
      */
     @VisibleForTesting
     static synchronized void reset() {
+        ApproovHurlStack.forgetRequestMutators();
         hurlStack = null;
         isInitialized = false;
         approovProtectionEnabled = false;

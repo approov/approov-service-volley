@@ -18,20 +18,24 @@
 package io.approov.service.volley;
 
 import com.android.volley.AuthFailureError;
+import com.android.volley.Header;
 import com.android.volley.Request;
 import com.android.volley.toolbox.HttpResponse;
 import com.android.volley.toolbox.HurlStack;
 import com.criticalblue.approovsdk.Approov;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
+import java.net.ProtocolException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,11 +57,48 @@ class ApproovHurlStack extends HurlStack {
     // logging tag
     private static final String TAG = "ApproovHurlStack";
 
+    // the maximum number of redirects followed for one request, as HttpURLConnection follows
+    static final int MAX_FOLLOW_UPS = 20;
+
+    // true while this thread sends an attempt whose redirects the layer follows itself
+    private static final ThreadLocal<Boolean> followsInLayer = new ThreadLocal<>();
+
+    // the service mutator each request was first processed with, so that a mutator change while a request is in
+    // flight never applies to its later attempts, such as a redirect or a Volley retry
+    private static final Map<Request<?>, ApproovServiceMutator> requestMutators = new WeakHashMap<>();
+
     /**
      * Constructs an new HurlStack that adds Approov tokens and pinning.
      */
     public ApproovHurlStack() {
         super();
+    }
+
+    /**
+     * Gets the service mutator for a request, which is the one in force when the layer first processed it.
+     *
+     * @param request is the app's request
+     * @return the service mutator for the request, never null
+     */
+    static ApproovServiceMutator mutatorFor(Request<?> request) {
+        synchronized (requestMutators) {
+            ApproovServiceMutator mutator = requestMutators.get(request);
+            if (mutator == null) {
+                mutator = ApproovService.getServiceMutator();
+                requestMutators.put(request, mutator);
+            }
+            return mutator;
+        }
+    }
+
+    /**
+     * Forgets the service mutator of every request, so that each request is next processed with the mutator in
+     * force. This should only be used for testing.
+     */
+    static void forgetRequestMutators() {
+        synchronized (requestMutators) {
+            requestMutators.clear();
+        }
     }
 
     /**
@@ -84,10 +125,13 @@ class ApproovHurlStack extends HurlStack {
     protected HttpURLConnection createConnection(URL url) throws IOException {
         HttpURLConnection connection = super.createConnection(url);
 
-        // Workaround for the M release HttpURLConnection not observing the
-        // HttpURLConnection.setFollowRedirects() property.
-        // https://code.google.com/p/android/issues/detail?id=194495
-        connection.setInstanceFollowRedirects(HttpURLConnection.getFollowRedirects());
+        // the layer follows the redirects of a request it processes itself, as the platform would carry every
+        // Approov header and substituted secure string to the redirect target; any other request follows them
+        // as the platform does (the instance setting also works around the M release HttpURLConnection not
+        // observing the HttpURLConnection.setFollowRedirects() property,
+        // https://code.google.com/p/android/issues/detail?id=194495)
+        connection.setInstanceFollowRedirects(!Boolean.TRUE.equals(followsInLayer.get())
+                && HttpURLConnection.getFollowRedirects());
 
         if (!ApproovService.isApproovEnabled()) {
             return connection;
@@ -115,6 +159,13 @@ class ApproovHurlStack extends HurlStack {
      * Applies Approov protection to a request and sends it. If it is not currently possible to fetch an Approov
      * token for a protected host (typically due to no or poor network) the service mutator decides whether the
      * request fails, and a later retry should be made.
+     * <p>
+     * Redirects of a request the layer processes are followed here as HttpURLConnection would follow them when
+     * HttpURLConnection.getFollowRedirects() is true: 300 to 303 for any method, a method that permits a body
+     * becoming GET without one, 307 and 308 for GET and HEAD, never to another scheme, and at most 20
+     * follow-ups. Each hop drops Authorization on a change of host or port, as the platform does, and is
+     * evaluated as a new request for its URL: the protection added for the previous hop is not carried, and the
+     * hop is protected afresh from the app's own headers and placeholders if Approov protects its URL.
      */
     @Override
     public HttpResponse executeRequest(Request<?> request, Map<String, String> additionalHeaders)
@@ -126,17 +177,57 @@ class ApproovHurlStack extends HurlStack {
         if (!ApproovService.isApproovProtectionEnabled())
             return sendUntouched(request, cacheHeaders);
 
-        // check if we are to proceed with any Approov processing
-        ApproovServiceMutator mutator = ApproovService.getServiceMutator();
+        // check if we are to proceed with any Approov processing, under the mutator in force when the layer
+        // first processed the request, which governs all its attempts
+        ApproovServiceMutator mutator = mutatorFor(request);
         Map<String, String> hookHeaders = Collections.unmodifiableMap(new LinkedHashMap<>(cacheHeaders));
         if (!ApproovService.callMutator("handleRequestShouldProcess",
                 () -> mutator.handleRequestShouldProcess(request, hookHeaders)))
             return sendUntouched(request, cacheHeaders);
 
-        // protect the request for its URL and send it
+        // protect the request for its URL and send it, then follow any redirect, each hop protected for its own
+        // URL
         Attempt attempt = Attempt.first(request, cacheHeaders);
         Attempt sent = protect(attempt, mutator, true);
-        return executeNetworkRequest(sent.view, sent.wireHeaders);
+        int followUps = 0;
+        while (true) {
+            HttpResponse response;
+            followsInLayer.set(Boolean.TRUE);
+            try {
+                response = executeNetworkRequest(sent.view, sent.wireHeaders);
+            } finally {
+                followsInLayer.remove();
+            }
+            Attempt next = attempt.redirect(response);
+            if (next == null)
+                return response;
+            close(response);
+            if (++followUps > MAX_FOLLOW_UPS)
+                throw new ProtocolException("Too many follow-up requests: " + followUps);
+            ApproovLog.d(TAG, "Following redirect " + response.getStatusCode() + " to "
+                    + ApproovLog.loggableURL(next.url));
+
+            // the hop is a new request for its URL: excluded, or protected for it from the app's own headers
+            attempt = next;
+            ApproovRequestView hopView = attempt.view;
+            if (ApproovService.callMutator("handleRequestShouldProcess",
+                    () -> mutator.handleRequestShouldProcess(hopView, hookHeaders)))
+                sent = protect(attempt, mutator, false);
+            else
+                sent = attempt.untouched();
+        }
+    }
+
+    // closes the content of a response that is not returned, which releases its connection
+    private static void close(HttpResponse response) {
+        InputStream content = response.getContent();
+        if (content == null)
+            return;
+        try {
+            content.close();
+        } catch (IOException e) {
+            ApproovLog.d(TAG, "Redirect response not closed: " + e);
+        }
     }
 
     /**
@@ -702,6 +793,62 @@ class ApproovHurlStack extends HurlStack {
         }
     }
 
+    // the redirect status codes HttpURLConnection does not name
+    private static final int HTTP_TEMP_REDIRECT = 307;
+    private static final int HTTP_PERM_REDIRECT = 308;
+
+    /**
+     * Determines if a method permits a request body, which a 300 to 303 redirect turns into a GET without one, as
+     * HttpURLConnection does.
+     *
+     * @param method is the Volley request method
+     * @return true if the method permits a body
+     */
+    static boolean permitsRequestBody(int method) {
+        switch (method) {
+            case Request.Method.POST:
+            case Request.Method.PUT:
+            case Request.Method.PATCH:
+            case Request.Method.DELETE:
+            case Request.Method.OPTIONS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Determines if two URLs reach the same connection, by host and port, so that a redirect between them keeps
+     * the Authorization header as HttpURLConnection does. The scheme never changes on a followed redirect.
+     *
+     * @param a is a URL
+     * @param b is another URL
+     * @return true if the host and the port are the same
+     */
+    static boolean sameConnection(URL a, URL b) {
+        int portA = (a.getPort() != -1) ? a.getPort() : a.getDefaultPort();
+        int portB = (b.getPort() != -1) ? b.getPort() : b.getDefaultPort();
+        return a.getHost().equalsIgnoreCase(b.getHost()) && (portA == portB);
+    }
+
+    /**
+     * Gets the first value of a response header, without regard to the case of its name.
+     *
+     * @param response is the response
+     * @param name is the header name
+     * @return the value, or null if the header is absent
+     */
+    static String responseHeader(HttpResponse response, String name) {
+        List<Header> headers = response.getHeaders();
+        if (headers == null)
+            return null;
+        for (Header header : headers) {
+            if (name.equalsIgnoreCase(header.getName()))
+                return header.getValue();
+        }
+        return null;
+    }
+
     /**
      * One network attempt of an app's request: its URL, the app's own headers, the cache headers Volley adds and,
      * once it is protected, what is sent.
@@ -763,6 +910,74 @@ class ApproovHurlStack extends HurlStack {
         // gets the attempt sent as the view gives it, with the given wire headers
         Attempt sent(ApproovRequestView sentView, Map<String, String> headers) {
             return new Attempt(sentView, sentView.getUrl(), appHeaders, cacheHeaders, headers);
+        }
+
+        /**
+         * Gets the attempt that follows a response, if it is a redirect HttpURLConnection follows: 300 to 303
+         * for any method, a method that permits a body becoming GET without one, and 307 and 308 for GET and HEAD,
+         * to a URL with the same scheme, while HttpURLConnection.getFollowRedirects() is true. The target URL is
+         * taken from the Location header as the server sent it, resolved against the attempt URL. The app's own
+         * headers and the cache headers go on as the platform sends them: without Authorization on a change of
+         * host or port, and without the body headers when the body is dropped.
+         *
+         * @param response is the response to the attempt
+         * @return the next attempt, carrying the app's own headers with their placeholders, or null if the
+         * response is not followed
+         */
+        Attempt redirect(HttpResponse response) {
+            if (!HttpURLConnection.getFollowRedirects())
+                return null;
+            int code = response.getStatusCode();
+            int method = view.getMethod();
+            boolean toGet;
+            switch (code) {
+                case HttpURLConnection.HTTP_MULT_CHOICE:
+                case HttpURLConnection.HTTP_MOVED_PERM:
+                case HttpURLConnection.HTTP_MOVED_TEMP:
+                case HttpURLConnection.HTTP_SEE_OTHER:
+                    toGet = permitsRequestBody(method);
+                    break;
+                case HTTP_TEMP_REDIRECT:
+                case HTTP_PERM_REDIRECT:
+                    // a redirect that must keep the method and body is not followed automatically for any
+                    // method but GET and HEAD
+                    if ((method != Request.Method.GET) && (method != Request.Method.HEAD))
+                        return null;
+                    toGet = false;
+                    break;
+                default:
+                    return null;
+            }
+            String location = responseHeader(response, "Location");
+            if (location == null)
+                return null;
+            URL current;
+            URL target;
+            try {
+                current = new URL(url);
+                target = new URL(current, location);
+            } catch (MalformedURLException e) {
+                return null;
+            }
+            // as on the platform, a redirect never changes the scheme
+            if (!target.getProtocol().equalsIgnoreCase(current.getProtocol()))
+                return null;
+
+            Map<String, String> nextHeaders = new LinkedHashMap<>(appHeaders);
+            int nextMethod = method;
+            byte[] nextBody = view.getBody();
+            if (toGet) {
+                nextMethod = Request.Method.GET;
+                nextBody = null;
+                removeHeader(nextHeaders, "Transfer-Encoding");
+                removeHeader(nextHeaders, "Content-Length");
+                removeHeader(nextHeaders, "Content-Type");
+            }
+            if (!sameConnection(current, target))
+                removeHeader(nextHeaders, "Authorization");
+            String nextUrl = target.toString();
+            return new Attempt(view.attempt(nextUrl, nextMethod, nextBody, nextHeaders), nextUrl, nextHeaders,
+                    cacheHeaders, null);
         }
     }
 }
