@@ -141,21 +141,24 @@ class ApproovHurlStack extends HurlStack {
             return connection;
         }
 
-        // ensure the connection is pinned, unless the attempt opted out; a connection not made for an attempt
-        // this stack sends is pinned, as the pinning hook can only remove pinning
-        if ((connection instanceof HttpsURLConnection) && ((attempt == null) || attempt.pinned)) {
+        if (connection instanceof HttpsURLConnection) {
             HttpsURLConnection httpsConnection = (HttpsURLConnection) connection;
-            PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
-            httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
-            if (attempt != null)
-                attempt.verifier = pinningHostnameVerifier;
+
+            // ensure the connection is pinned, unless the attempt opted out; a connection not made for an
+            // attempt this stack sends is pinned, as the pinning hook can only remove pinning
+            if ((attempt == null) || attempt.pinned) {
+                PinningHostnameVerifier pinningHostnameVerifier = new PinningHostnameVerifier(
+                        HttpsURLConnection.getDefaultHostnameVerifier());
+                httpsConnection.setHostnameVerifier(pinningHostnameVerifier);
+                if (attempt != null)
+                    attempt.verifier = pinningHostnameVerifier;
+            }
 
             // The HostnameVerifier (and therefore the live-pin check) only runs during the TLS
             // handshake of a NEW connection, never when HttpURLConnection reuses a pooled
-            // keep-alive connection. Request "Connection: close" on pinned connections so each
-            // request performs a fresh handshake: this guarantees a dynamic pin update (spec §4)
-            // takes effect on the very next request instead of lingering on a connection that was
-            // established under a now-superseded pin set.
+            // keep-alive connection. Request "Connection: close" on every connection, pinned or not,
+            // so each request performs a fresh handshake: a dynamic pin update takes effect on the
+            // very next request, and a pinned request never reuses a connection that was not pinned.
             httpsConnection.setRequestProperty("Connection", "close");
         }
 
@@ -185,8 +188,8 @@ class ApproovHurlStack extends HurlStack {
             return sendUntouched(request, cacheHeaders);
 
         // WebSockets are not supported, so an upgrade is sent untouched (no token fetch, no Approov headers, no
-        // secure string substitution and no signature), so that nothing Approov issues travels on a connection
-        // the layer does not handle as an HTTP request
+        // secure string substitution, no signature and no Approov pinning, as the pinning hook is not asked), so
+        // that nothing Approov issues travels on a connection the layer does not handle as an HTTP request
         Attempt attempt = Attempt.first(request, cacheHeaders);
         String upgrade = header(attempt.appHeaders, "Upgrade");
         if (upgrade == null)
@@ -194,7 +197,7 @@ class ApproovHurlStack extends HurlStack {
         if ("websocket".equalsIgnoreCase((upgrade != null) ? upgrade.trim() : null)) {
             ApproovLog.d(TAG, "WebSocket upgrade to " + ApproovService.loggableHost(attempt.url)
                     + " sent without Approov processing (not supported)");
-            return send(attempt.untouched(), false, true);
+            return send(attempt.untouched(), false, false);
         }
 
         // check if we are to proceed with any Approov processing, under the mutator in force when the layer

@@ -46,7 +46,9 @@ import javax.net.ssl.SSLSocketFactory;
 
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import okhttp3.mockwebserver.QueueDispatcher;
 import okhttp3.mockwebserver.RecordedRequest;
+import okhttp3.mockwebserver.SocketPolicy;
 import okhttp3.tls.HandshakeCertificates;
 import okhttp3.tls.HeldCertificate;
 
@@ -61,6 +63,10 @@ import okhttp3.tls.HeldCertificate;
  * name the host, so a pin check is only made on the JVM with a certificate that names neither host. Such a
  * fixture also sets a platform default HostnameVerifier that accepts any name, which stands in for the
  * platform's own host name check that passes on a device.
+ * <p>
+ * Both servers close the connection after a response to a request that asks for it with "Connection: close",
+ * as an HTTP/1.1 server must. A MockWebServer otherwise keeps it open, and the JVM's HttpURLConnection would
+ * reuse it for the next request without a new handshake.
  */
 final class MiniSdkHttpsOrigins {
     static final String CONFIG = "#test-account#mAxOF0ekJUOC36J5XWmVmVipOcUoEdMjhPSp2FVtyTo=";
@@ -91,6 +97,8 @@ final class MiniSdkHttpsOrigins {
      * JVM asks the hostname verifier of each connection, where the layer checks the pins
      */
     MiniSdkHttpsOrigins(boolean secondOverTls, boolean namesHosts) throws Exception {
+        first.setDispatcher(new ClosesWhenAsked());
+        second.setDispatcher(new ClosesWhenAsked());
         HeldCertificate.Builder builder = new HeldCertificate.Builder();
         if (namesHosts)
             builder.addSubjectAlternativeName("localhost").addSubjectAlternativeName("127.0.0.1");
@@ -193,6 +201,17 @@ final class MiniSdkHttpsOrigins {
         AttesterProxyController.reset();
         AttesterProxyController.resetSdkForTesting();
         ApproovService.reset();
+    }
+
+    /** The queue of responses, each closing the connection when the request asks for it. */
+    static final class ClosesWhenAsked extends QueueDispatcher {
+        @Override
+        public MockResponse dispatch(RecordedRequest request) throws InterruptedException {
+            MockResponse response = super.dispatch(request);
+            if ("close".equalsIgnoreCase(request.getHeader("Connection")))
+                response.setHeader("Connection", "close").setSocketPolicy(SocketPolicy.DISCONNECT_AT_END);
+            return response;
+        }
     }
 
     /** A Volley request with app headers, an optional body and the method given. */

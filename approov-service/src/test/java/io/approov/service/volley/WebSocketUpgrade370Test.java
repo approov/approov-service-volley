@@ -20,6 +20,7 @@ package io.approov.service.volley;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.android.volley.Request;
 import com.criticalblue.approovsdk.Approov;
@@ -35,6 +36,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+
+import javax.net.ssl.SSLPeerUnverifiedException;
 
 import okhttp3.mockwebserver.RecordedRequest;
 
@@ -101,6 +104,38 @@ public class WebSocketUpgrade370Test {
         assertEquals("no token fetch", 0, sdk.count("fetchApproovTokenAndWait"));
         assertEquals("no secure string fetch", 0, sdk.count("fetchSecureStringAndWait"));
         assertEquals("no mutator hook", Collections.emptyList(), hooks);
+    }
+
+    @Test
+    public void aWebSocketUpgradeGetsNoApproovPinningWhileAnOrdinaryRequestIsRefusedByThePin() throws Exception {
+        // a certificate that does not name the host, so that the JVM asks the hostname verifier, and a pin it
+        // does not match
+        origins.shutdown();
+        origins = new MiniSdkHttpsOrigins(true, false);
+        sdk = origins.initialize(new MiniSdkHook());
+        sdk.pins = Collections.singletonMap("localhost",
+                Collections.singletonList("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="));
+        sdk.answerTokens(Approov.TokenFetchStatus.SUCCESS, "jwt-token", "trace-1");
+        List<String> pinningAsked = Collections.synchronizedList(new ArrayList<String>());
+        ApproovService.setServiceMutator(new ApproovServiceMutator() {
+            @Override
+            public boolean handlePinningShouldProcessRequest(Request<?> request) {
+                pinningAsked.add(request.getUrl());
+                return true;
+            }
+        });
+
+        RecordedRequest recorded = send("websocket");
+        MiniSdkHttpsOrigins.assertNoApproovHeaders("upgrade", recorded);
+        assertEquals("the pinning hook is not asked for an upgrade", Collections.emptyList(), pinningAsked);
+
+        try {
+            origins.send(new MiniSdkHttpsOrigins.AppRequest(origins.firstUrl("/ordinary")));
+            fail("an ordinary request reached a host whose certificate fails the pin");
+        } catch (SSLPeerUnverifiedException e) {
+            assertEquals("Approov pinning: no pin matches for localhost", e.getMessage());
+        }
+        assertEquals("only the upgrade reached the server", 1, origins.first.getRequestCount());
     }
 
     @Test
