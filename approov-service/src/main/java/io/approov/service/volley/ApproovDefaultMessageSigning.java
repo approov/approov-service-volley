@@ -19,7 +19,6 @@ package io.approov.service.volley;
 
 import android.net.Uri;
 import android.util.Base64;
-import android.util.Log;
 
 import com.android.volley.AuthFailureError;
 import com.android.volley.Request;
@@ -246,12 +245,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     try {
                         base64 = getInstallMessageSignature(message);
                     } catch (ApproovException e) {
-                        Log.e(TAG, "Install message signature unavailable - proceeding unsigned: " + e);
+                        ApproovLog.e(TAG, "Install message signature unavailable - proceeding unsigned: " + e);
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
                     if (base64.isEmpty()) {
-                        Log.e(TAG, "Install message signature empty - proceeding unsigned");
+                        ApproovLog.e(TAG, "Install message signature empty - proceeding unsigned");
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
@@ -260,7 +259,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                         signature = es256DerToRaw(signature);
                     } catch (Exception e) {
                         // Fail-open: a malformed install signature is logged and the request proceeds unsigned.
-                        Log.e(TAG, "Failed to decode ASN.1 DER ES256 signature - proceeding unsigned: " + e, e);
+                        ApproovLog.e(TAG, "Failed to decode ASN.1 DER ES256 signature - proceeding unsigned: " + e, e);
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
@@ -272,12 +271,12 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     try {
                         base64 = getAccountMessageSignature(message);
                     } catch (ApproovException e) {
-                        Log.e(TAG, "Account message signature unavailable - proceeding unsigned: " + e);
+                        ApproovLog.e(TAG, "Account message signature unavailable - proceeding unsigned: " + e);
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
                     if (base64.isEmpty()) {
-                        Log.e(TAG, "Account message signature empty - proceeding unsigned");
+                        ApproovLog.e(TAG, "Account message signature empty - proceeding unsigned");
                         removeSignatureHeaders(originalHeaders);
                         return originalHeaders;
                     }
@@ -318,7 +317,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     signedHeaders.put("Signature-Base-Digest", digestHeader);
                     addedHeaderKeys.add("Signature-Base-Digest");
                 } catch (NoSuchAlgorithmException e) {
-                    Log.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
+                    ApproovLog.d(TAG, "Failed to get digest algorithm - no debug entry " + e);
                 }
             }
 
@@ -328,7 +327,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             // Fail-open: any other signing failure (signature-base component missing, base64 decode,
             // serialization, etc.) is logged and the request proceeds unsigned. ApproovException is
             // checked and is NOT caught here, so the unsupported-algorithm fail-closed path propagates.
-            Log.e(TAG, "Message signing failed - proceeding unsigned: " + e, e);
+            ApproovLog.e(TAG, "Message signing failed - proceeding unsigned: " + e, e);
             removeSignatureHeaders(originalHeaders);
             return originalHeaders;
         }
@@ -601,7 +600,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
                     this.headers.putAll(requestHeaders);
                 }
             } catch (AuthFailureError e) {
-                Log.d(TAG, "Unable to fetch request headers for message signing " + e);
+                ApproovLog.d(TAG, "Unable to fetch request headers for message signing " + e);
             }
             if (headers != null) {
                 this.headers.putAll(headers);
@@ -638,7 +637,7 @@ public class ApproovDefaultMessageSigning implements ApproovServiceMutator {
             try {
                 return request.getBody();
             } catch (AuthFailureError e) {
-                Log.d(TAG, "Unable to fetch request body for message signing " + e);
+                ApproovLog.d(TAG, "Unable to fetch request body for message signing " + e);
                 return null;
             }
         }

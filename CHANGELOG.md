@@ -11,6 +11,9 @@ Entries marked **Breaking** need a source change.
 ### Changed
 - **Breaking:** The message signing helper classes moved from `io.approov.util.http.sfv` and `io.approov.util.sig` to `io.approov.util.volley.http.sfv` and `io.approov.util.volley.sig`. Update imports of classes such as `SignatureParameters` and `ComponentProvider`.
 
+### Added
+- `ApproovService.setLoggingLevel(ApproovLogLevel)`, `INFO` by default. `OFF` silences the layer, and debug logging for the `ApproovService` tag raises any other level to `DEBUG`. The loggable token is logged at `DEBUG` only, with the URL without its query, user info or fragment.
+
 ## [3.5.6] - 2026-10-07
 
 ### Changed

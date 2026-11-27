@@ -17,7 +17,6 @@
 
 package io.approov.service.volley;
 
-import android.util.Log;
 import android.content.Context;
 
 import androidx.annotation.VisibleForTesting;
@@ -120,7 +119,7 @@ public class ApproovService {
         // If we are already initialized with a valid config, ignore any subsequent
         // empty config initialization
         if (isApproovEnabled() && config.isEmpty()) {
-            Log.d(TAG, "ApproovService already initialized with a valid config; ignoring empty configuration");
+            ApproovLog.i(TAG, "initialize: empty config ignored, Approov protection already enabled");
             return;
         }
 
@@ -141,13 +140,13 @@ public class ApproovService {
             try {
                 boolean sdkInitialized = Approov.initialize(context.getApplicationContext(), config, "auto", comment);
                 if (!sdkInitialized) {
-                    Log.d(TAG, "Approov SDK already initialized");
+                    ApproovLog.d(TAG, "Approov SDK already initialized");
                 }
             } catch (IllegalArgumentException e) {
-                Log.e(TAG, "Approov initialization failed: " + e.getMessage());
+                ApproovLog.e(TAG, "Approov initialization failed: " + e.getMessage());
                 throw e; // service-layer state NOT modified — prior operating mode preserved
             } catch (IllegalStateException e) {
-                Log.e(TAG, "Approov initialization failed: " + e.getMessage());
+                ApproovLog.e(TAG, "Approov initialization failed: " + e.getMessage());
                 throw e; // service-layer state NOT modified — prior operating mode preserved
             }
             Approov.setUserProperty("approov-service-volley/" + BuildConfig.APPROOV_SERVICE_VERSION);
@@ -167,6 +166,10 @@ public class ApproovService {
         hurlStack = new ApproovHurlStack();
         isInitialized = true;
         configString = config;
+        if (config.isEmpty())
+            ApproovLog.i(TAG, "initialize: bypass mode, Approov protection not active");
+        else
+            ApproovLog.i(TAG, "initialize: Approov protection enabled");
     }
 
     /**
@@ -190,7 +193,7 @@ public class ApproovService {
      */
     @Deprecated
     public static synchronized void setProceedOnNetworkFail(boolean proceed) {
-        Log.d(TAG, "setProceedOnNetworkFail is deprecated and does nothing.");
+        ApproovLog.d(TAG, "setProceedOnNetworkFail is deprecated and does nothing.");
     }
 
     /**
@@ -209,7 +212,7 @@ public class ApproovService {
      * @param shouldUse true if the fetch status should be used as the token value
      */
     public static synchronized void setUseApproovStatusIfNoToken(boolean shouldUse) {
-        Log.d(TAG, "setUseApproovStatusIfNoToken " + shouldUse);
+        ApproovLog.d(TAG, "setUseApproovStatusIfNoToken " + shouldUse);
         useApproovStatusIfNoToken = shouldUse;
     }
 
@@ -258,6 +261,25 @@ public class ApproovService {
         bindingHeader = null;
         exclusionURLRegexs = null;
         serviceMutator = ApproovServiceMutator.DEFAULT;
+        ApproovLog.setLevel(ApproovLogLevel.INFO);
+    }
+
+    /**
+     * Sets the logging level of the service layer. ERROR writes errors only, WARNING adds warnings, INFO
+     * (the default) adds information and DEBUG adds the debug lines, including the loggable token of each
+     * request whose claims include the device ID. OFF writes nothing. The level may be set at any time and
+     * is not reset by initialize. Debug logging enabled for the ApproovService tag, with
+     * "adb shell setprop log.tag.ApproovService DEBUG", raises any level but OFF to DEBUG without a rebuild.
+     * Note that the logging of the Approov SDK itself is not affected.
+     *
+     * @param level is the logging level to be used
+     * @throws IllegalArgumentException if the level is null
+     */
+    public static void setLoggingLevel(ApproovLogLevel level) {
+        if (level == null)
+            throw new IllegalArgumentException("setLoggingLevel: null level");
+        ApproovLog.setLevel(level);
+        ApproovLog.d(TAG, "setLoggingLevel " + level);
     }
 
    /**
@@ -274,7 +296,7 @@ public class ApproovService {
     public static synchronized void setDevKey(String devKey) throws ApproovException {
         try {
             Approov.setDevKey(devKey);
-            Log.d(TAG, "setDevKey");
+            ApproovLog.d(TAG, "setDevKey");
         }
         catch (IllegalStateException e) {
             throw new ApproovException("IllegalState: " + e.getMessage());
@@ -293,7 +315,7 @@ public class ApproovService {
      * @param prefix is any prefix String for the Approov token header
      */
     public static synchronized void setApproovHeader(String header, String prefix) {
-        Log.d(TAG, "setApproovHeader " + header + ", " + prefix);
+        ApproovLog.d(TAG, "setApproovHeader " + header + ", " + prefix);
         approovTokenHeader = header;
         // A null prefix is equivalent to no prefix (empty string). Storing null here would later
         // concatenate the literal string "null" in front of the token, producing a malformed
@@ -327,7 +349,7 @@ public class ApproovService {
      * @param header is the name of the header on which to place the Approov TraceID, or null to disable it
      */
     public static synchronized void setApproovTraceIDHeader(String header) {
-        Log.d(TAG, "setApproovTraceIDHeader " + header);
+        ApproovLog.d(TAG, "setApproovTraceIDHeader " + header);
         approovTraceIDHeader = header;
     }
 
@@ -350,7 +372,7 @@ public class ApproovService {
      * @param header is the header to use for Approov token binding
      */
     public static synchronized void setBindingHeader(String header) {
-        Log.d(TAG, "setBindingHeader " + header);
+        ApproovLog.d(TAG, "setBindingHeader " + header);
         bindingHeader = header;
     }
 
@@ -372,7 +394,7 @@ public class ApproovService {
         if (mutator == null) {
             mutator = ApproovServiceMutator.DEFAULT;
         }
-        Log.d(TAG, "Applied ApproovServiceMutator: " + mutator.toString());
+        ApproovLog.d(TAG, "Applied ApproovServiceMutator: " + mutator.toString());
         serviceMutator = mutator;
     }
 
@@ -453,9 +475,9 @@ public class ApproovService {
             try {
                 Pattern pattern = Pattern.compile(urlRegex);
                 exclusionURLRegexs.put(urlRegex, pattern);
-                Log.d(TAG, "addExclusionURLRegex " + urlRegex);
+                ApproovLog.d(TAG, "addExclusionURLRegex " + urlRegex);
             } catch (PatternSyntaxException e) {
-                Log.e(TAG, "addExclusionURLRegex " + urlRegex + " error: " + e.getMessage());
+                ApproovLog.e(TAG, "addExclusionURLRegex " + urlRegex + " error: " + e.getMessage());
             }
         }
     }
@@ -467,7 +489,7 @@ public class ApproovService {
      */
     public static synchronized void removeExclusionURLRegex(String urlRegex) {
         if (hurlStack != null) {
-            Log.d(TAG, "removeExclusionURLRegex " + urlRegex);
+            ApproovLog.d(TAG, "removeExclusionURLRegex " + urlRegex);
             exclusionURLRegexs.remove(urlRegex);
         }
     }
@@ -490,7 +512,7 @@ public class ApproovService {
      */
     @Deprecated
     public static synchronized void prefetch() {
-        Log.d(TAG, "prefetch is deprecated and does nothing.");
+        ApproovLog.d(TAG, "prefetch is deprecated and does nothing.");
     }
 
     // Performs a precheck to determine if the app will pass attestation. This requires secure
@@ -504,14 +526,14 @@ public class ApproovService {
     // @throws ApproovException if there was a problem
     public static void precheck() throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "precheck: SDK not initialized");
+            ApproovLog.e(TAG, "precheck: SDK not initialized");
             throw new ApproovException("precheck: SDK not initialized");
         }
         // try and fetch a non-existent secure string in order to check for a rejection
         Approov.TokenFetchResult approovResults;
         try {
             approovResults = Approov.fetchSecureStringAndWait("precheck-dummy-key", null);
-            Log.d(TAG, "precheck: " + approovResults.getStatus().toString());
+            ApproovLog.d(TAG, "precheck: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);
@@ -533,12 +555,12 @@ public class ApproovService {
      */
     public static String getDeviceID() throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "getDeviceID: SDK not initialized");
+            ApproovLog.e(TAG, "getDeviceID: SDK not initialized");
             throw new ApproovException("getDeviceID: SDK not initialized");
         }
         try {
             String deviceID = Approov.getDeviceID();
-            Log.d(TAG, "getDeviceID: " + deviceID);
+            ApproovLog.d(TAG, "getDeviceID: " + deviceID);
             return deviceID;
         }
         catch (IllegalStateException e) {
@@ -558,12 +580,12 @@ public class ApproovService {
      */
     public static void setDataHashInToken(String data) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "setDataHashInToken: SDK not initialized");
+            ApproovLog.e(TAG, "setDataHashInToken: SDK not initialized");
             throw new ApproovException("setDataHashInToken: SDK not initialized");
         }
         try {
             Approov.setDataHashInToken(data);
-            Log.d(TAG, "setDataHashInToken");
+            ApproovLog.d(TAG, "setDataHashInToken");
         }
         catch (IllegalStateException e) {
             throw new ApproovException("IllegalState: " + e.getMessage());
@@ -588,14 +610,14 @@ public class ApproovService {
      */
     public static String fetchToken(String url) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "fetchToken: SDK not initialized");
+            ApproovLog.e(TAG, "fetchToken: SDK not initialized");
             throw new ApproovException("fetchToken: SDK not initialized");
         }
         // fetch the Approov token
         Approov.TokenFetchResult approovResults;
         try {
             approovResults = Approov.fetchApproovTokenAndWait(url);
-            Log.d(TAG, "fetchToken: " + approovResults.getStatus().toString());
+            ApproovLog.d(TAG, "fetchToken: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);
@@ -634,12 +656,12 @@ public class ApproovService {
      */
     public static String getAccountMessageSignature(String message) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "getAccountMessageSignature: SDK not initialized");
+            ApproovLog.e(TAG, "getAccountMessageSignature: SDK not initialized");
             throw new ApproovException("getAccountMessageSignature: SDK not initialized");
         }
         try {
             String signature = Approov.getAccountMessageSignature(message);
-            Log.d(TAG, "getAccountMessageSignature");
+            ApproovLog.d(TAG, "getAccountMessageSignature");
             if (signature == null)
                 throw new ApproovException("no account signature available");
             return signature;
@@ -661,12 +683,12 @@ public class ApproovService {
      */
     public static String getInstallMessageSignature(String message) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "getInstallMessageSignature: SDK not initialized");
+            ApproovLog.e(TAG, "getInstallMessageSignature: SDK not initialized");
             throw new ApproovException("getInstallMessageSignature: SDK not initialized");
         }
         try {
             String signature = Approov.getInstallMessageSignature(message);
-            Log.d(TAG, "getInstallMessageSignature");
+            ApproovLog.d(TAG, "getInstallMessageSignature");
             if (signature == null)
                 throw new ApproovException("no device signature available");
             return signature;
@@ -697,7 +719,7 @@ public class ApproovService {
      */
     public static String fetchSecureString(String key, String newDef) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "fetchSecureString: SDK not initialized");
+            ApproovLog.e(TAG, "fetchSecureString: SDK not initialized");
             throw new ApproovException("fetchSecureString: SDK not initialized");
         }
         // determine the type of operation as the values themselves cannot be logged
@@ -709,7 +731,7 @@ public class ApproovService {
         Approov.TokenFetchResult approovResults;
         try {
             approovResults = Approov.fetchSecureStringAndWait(key, newDef);
-            Log.d(TAG, "fetchSecureString " + type + ": " + key + ", " + approovResults.getStatus().toString());
+            ApproovLog.d(TAG, "fetchSecureString " + type + ": " + key + ", " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);
@@ -735,14 +757,14 @@ public class ApproovService {
      */
     public static String fetchCustomJWT(String payload) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "fetchCustomJWT: SDK not initialized");
+            ApproovLog.e(TAG, "fetchCustomJWT: SDK not initialized");
             throw new ApproovException("fetchCustomJWT: SDK not initialized");
         }
         // fetch the custom JWT catching any exceptions the SDK might throw
         Approov.TokenFetchResult approovResults;
         try {
             approovResults = Approov.fetchCustomJWTAndWait(payload);
-            Log.d(TAG, "fetchCustomJWT: " + approovResults.getStatus().toString());
+            ApproovLog.d(TAG, "fetchCustomJWT: " + approovResults.getStatus().toString());
         }
         catch (IllegalStateException e) {
             throw new ApproovException(e);
@@ -765,13 +787,13 @@ public class ApproovService {
      */
     public static String getLastARC() {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "getLastARC: SDK not initialized");
+            ApproovLog.e(TAG, "getLastARC: SDK not initialized");
             return "";
         }
         // Get the dynamic pins from Approov
         Map<String, List<String>> approovPins = Approov.getPins("public-key-sha256");
         if (approovPins == null || approovPins.isEmpty()) {
-            Log.e(TAG, "ApproovService: no host pinning information available");
+            ApproovLog.e(TAG, "ApproovService: no host pinning information available");
             return "";
         }
         // The approovPins contains a map of hostnames to pin strings. Skip '*' and use another hostname if available.
@@ -791,14 +813,14 @@ public class ApproovService {
                         return arc;
                     }
                 }
-                Log.i(TAG, "ApproovService: ARC code unavailable");
+                ApproovLog.i(TAG, "ApproovService: ARC code unavailable");
                 return "";
             } catch (Exception e) {
-                Log.e(TAG, "ApproovService: error fetching ARC", e);
+                ApproovLog.e(TAG, "ApproovService: error fetching ARC", e);
                 return "";
             }
         } else {
-            Log.i(TAG, "ApproovService: ARC code unavailable");
+            ApproovLog.i(TAG, "ApproovService: ARC code unavailable");
             return "";
         }
     }
@@ -816,17 +838,17 @@ public class ApproovService {
      */
     public static void setInstallAttrsInToken(String attrs) throws ApproovException {
         if (!isApproovEnabled()) {
-            Log.e(TAG, "setInstallAttrsInToken: SDK not initialized");
+            ApproovLog.e(TAG, "setInstallAttrsInToken: SDK not initialized");
             throw new ApproovException("setInstallAttrsInToken: SDK not initialized");
         }
         try {
             Approov.setInstallAttrsInToken(attrs);
-            Log.d(TAG, "setInstallAttrsInToken");
+            ApproovLog.d(TAG, "setInstallAttrsInToken");
         } catch (IllegalArgumentException e) {
-            Log.e(TAG, "setInstallAttrsInToken failed with IllegalArgument: " + e.getMessage());
+            ApproovLog.e(TAG, "setInstallAttrsInToken failed with IllegalArgument: " + e.getMessage());
             throw new ApproovException("Illegal Argument: " + e.getMessage());
         } catch (IllegalStateException e) {
-            Log.e(TAG, "setInstallAttrsInToken failed with IllegalState: " + e.getMessage());
+            ApproovLog.e(TAG, "setInstallAttrsInToken failed with IllegalState: " + e.getMessage());
             throw new ApproovException("Illegal State: " + e.getMessage());
         }
     }
@@ -889,7 +911,7 @@ public class ApproovService {
             Approov.TokenFetchResult approovResults;
             try {
                 approovResults = Approov.fetchSecureStringAndWait(value.substring(prefix.length()), null);
-                Log.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus().toString());
+                ApproovLog.d(TAG, "Substituting header: " + substitutionHeader + ", " + approovResults.getStatus().toString());
             }
             catch (IllegalStateException e) {
                 throw new ApproovException(e);
@@ -948,7 +970,7 @@ public class ApproovService {
             Approov.TokenFetchResult approovResults;
             try {
                 approovResults = Approov.fetchSecureStringAndWait(value, null);
-                Log.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus().toString());
+                ApproovLog.d(TAG, "Substituting query param: " + queryParam + ", " + approovResults.getStatus().toString());
             }
             catch (IllegalStateException e) {
                 throw new ApproovException(e);
@@ -1017,7 +1039,7 @@ public class ApproovService {
             catch (IllegalArgumentException e) {
                 throw new ApproovException(e);
             }
-            Log.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
+            ApproovLog.d(TAG, "Substituting query parameter: " + queryParameter + ", " + approovResults.getStatus().toString());
             if (getServiceMutator().handleRequestQueryParamSubstitutionResult(approovResults, queryParameter)) {
                 // Only substitute when a non-empty secure string is available.
                 // A null or empty result means substitution yielded no value; the original
@@ -1162,7 +1184,7 @@ class ApproovHurlStack extends HurlStack {
         catch (IllegalArgumentException e) {
             throw new ApproovException(e);
         }
-        Log.d(TAG, "Token for " + request.getUrl() + ": " + approovResults.getLoggableToken());
+        ApproovLog.d(TAG, "Token for " + ApproovLog.loggableURL(request.getUrl()) + ": " + approovResults.getLoggableToken());
 
         boolean continueWithFullProcessing = mutator.handleRequestFetchTokenResult(approovResults, url);
         ApproovRequestMutations changes = new ApproovRequestMutations();
@@ -1171,7 +1193,7 @@ class ApproovHurlStack extends HurlStack {
             tokenHeaderValue = mutator.handleRequestTokenHeaderValue(approovResults, url);
         } else if (shouldSendFallbackStatusHeader(approovResults)) {
             tokenHeaderValue = ApproovService.getApproovTokenHeaderValueOrStatus(approovResults);
-            Log.d(TAG, "Proceeding with fallback token header " + ApproovService.getApproovHeader()
+            ApproovLog.d(TAG, "Proceeding with fallback token header " + ApproovService.getApproovHeader()
                     + ": " + tokenHeaderValue);
         } else {
             return executeNetworkRequest(request, headers);
@@ -1260,14 +1282,14 @@ final class PinningHostnameVerifier implements HostnameVerifier {
                         return true;
                 }
                 else
-                    Log.e(TAG, "Certificate not X.509");
+                    ApproovLog.e(TAG, "Certificate not X.509");
             }
 
             // the connection is rejected
-            Log.w(TAG, "Pinning rejection for " + hostname);
+            ApproovLog.w(TAG, "Pinning rejection for " + hostname);
             return false;
         } catch (SSLException e) {
-            Log.e(TAG, "Delegate Exception");
+            ApproovLog.e(TAG, "Delegate Exception");
             throw new RuntimeException(e);
         }
         return false;
