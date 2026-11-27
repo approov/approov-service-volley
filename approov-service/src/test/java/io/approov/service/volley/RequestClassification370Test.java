@@ -258,6 +258,34 @@ public class RequestClassification370Test {
         }
     }
 
+    // with no mutator installed, or a null one, the decisions are those of closeFailureMutator
+    @Test
+    public void outOfTheBoxAndWithNullTheDecisionsAreCloseFailure() throws Exception {
+        for (boolean installNull : new boolean[] {false, true}) {
+            if (installNull)
+                ApproovService.setServiceMutator(null);
+            assertSame(ApproovServiceMutator.CLOSE_FAILURE, ApproovService.getServiceMutator());
+            sdk.answerTokens(Approov.TokenFetchStatus.REJECTED, null, "trace-r");
+            try {
+                origins.send(request());
+                fail("REJECTED must abort");
+            } catch (ApproovFetchStatusException e) {
+                assertSame(Approov.TokenFetchStatus.REJECTED, e.getTokenFetchStatus());
+            }
+            sdk.answerTokens(Approov.TokenFetchStatus.NO_NETWORK, null, "trace-n");
+            try {
+                origins.send(request());
+                fail("NO_NETWORK must abort");
+            } catch (ApproovNetworkException e) {
+                assertSame(Approov.TokenFetchStatus.NO_NETWORK, e.getTokenFetchStatus());
+            }
+            sdk.answerTokens(Approov.TokenFetchStatus.NO_APPROOV_SERVICE, null, "trace-s");
+            RecordedRequest recorded = sendFirst(request());
+            assertEquals("", recorded.getHeader("Approov-Token"));
+            assertEquals("trace-s", recorded.getHeader("Approov-TraceID"));
+        }
+    }
+
     @Test
     public void aProceedingFailureIsSignedOverTheTokenHeaderAsSent() throws Exception {
         ApproovService.setServiceMutator(ApproovDefaultMessageSigning.combined(ApproovServiceMutator.ALWAYS_PROCEED));
