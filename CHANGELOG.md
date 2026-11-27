@@ -13,6 +13,7 @@ Entries marked **Breaking** need a source change. See [Upgrading from 3.5.x](REA
 - **Breaking:** `initialize` passes every non-empty account ID and comment to the Approov SDK and the SDK decides, so the layer no longer compares account IDs itself. It resets the configuration each time, so make your configuration calls after it. It throws `IllegalArgumentException` for a null context, also in bypass mode (`""`). See [initialize, then configure](ADVANCED.md#initialize-then-configure).
 - **Breaking:** `SignatureParametersFactory` has a new protected field, `useInstallMessageSigning`, which starts `true`, and its parameters no longer set the algorithm, as the signer produces one signature per algorithm the factory selects. A subclass that sets `useAccountMessageSigning = true` directly now produces both signatures. Call `setUseAccountMessageSigning()` to produce the account signature only.
 - The package follows the redirects of the requests it processes. A hop to another origin carries nothing the package added, and a hop to the same origin is protected again. See [redirects](ADVANCED.md#redirects).
+- `getBaseHttpStack()` no longer returns `null` before `initialize` or in bypass mode. Requests through that stack go out without Approov protection until `initialize` is called, and the same stack then protects them.
 - A WebSocket upgrade request is sent untouched, with no Approov token, secure strings or signature.
 - Pins are matched against the certificate chain the platform validated. A pin matches the host without regard to case and with one trailing dot ignored.
 - If the SDK cannot supply the pins, connections continue on OS trust and one error is logged. See [connection validation](ADVANCED.md#connection-validation).
@@ -22,6 +23,7 @@ Entries marked **Breaking** need a source change. See [Upgrading from 3.5.x](REA
 - Secure strings are substituted on requests to secrets-only API domains (`approov api -add <domain> -noApproovToken`) as well as on token-protected ones.
 - `NO_APPROOV_SERVICE` proceeds with the trace header, as a failure status does, where 3.5.x sent no Approov headers.
 - A token fetch that is rejected throws `ApproovFetchStatusException`, where 3.5.x threw `ApproovRejectionException`.
+- `ApproovRejectionException` is now a subclass of `ApproovFetchStatusException` with the status `REJECTED`, so a handler for `ApproovFetchStatusException` catches it. Its constructor and getters are unchanged.
 - An exception from your own mutator reaches your app as an `ApproovException` that names the hook, with the original as its cause. Volley delivers it as an `AuthFailureError`.
 - The token header is set after your `handleRequestProcessedHeaders` hook runs, so the hook cannot remove it.
 - Each token is bound to its own request's binding header value, also when requests with different values are in flight at once.

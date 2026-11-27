@@ -53,7 +53,7 @@ Next, [initialize the package](#initializing).
 
 ## INITIALIZING
 
-Initialize `ApproovService` once, when your app starts, with your Approov account ID. Do this in the `onCreate` method of your `Application` class. Build your request queue after `initialize`. A queue that your app builds before `initialize` sends its requests without Approov protection.
+Initialize `ApproovService` once, when your app starts, with your Approov account ID. Do this in the `onCreate` method of your `Application` class. If your app sends a request through the stack from `ApproovService` before `initialize`, the request goes out without Approov protection.
 
 ```java
 import android.util.Log;
@@ -153,7 +153,7 @@ val queue = Volley.newRequestQueue(context, ApproovService.getBaseHttpStack())
 ```
 </details>
 
-`getBaseHttpStack()` returns `null` in [bypass mode](ADVANCED.md#bypass-initialization) and before `initialize`. Volley then builds its standard stack, so the same line works in both cases. A queue built this way stays unprotected, also after a later `initialize` turns Approov on. Build a new queue after that `initialize`.
+The stack from `getBaseHttpStack()` works before `initialize` and in [bypass mode](ADVANCED.md#bypass-initialization), where it sends requests without Approov protection. A queue that you built with it protects its requests from the time `initialize` turns Approov on.
 
 Your requests work as they did before. The stack adds the token and the other Approov headers to each request, and replaces the secure strings that you [registered](ADVANCED.md#secure-strings). Register the headers and query parameters for secure strings with `addSubstitutionHeader` and `addSubstitutionQueryParam`, so that you do not need to change your `Request` classes.
 

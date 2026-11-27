@@ -57,7 +57,7 @@ A request to one of your Approov API domains that goes ahead after a failed toke
 
 The direct methods (`precheck`, `fetchToken`, `fetchSecureString`, `fetchCustomJWT` and so on) return a value to your code. They report a failure with the exceptions described below.
 
-Before `initialize`, and in [bypass mode](ADVANCED.md#bypass-initialization), `getBaseHttpStack` returns `null`, and a queue built from it goes out without any Approov processing and without Approov pinning. It is neither failed nor held.
+Before `initialize`, and in [bypass mode](ADVANCED.md#bypass-initialization), a request made through the stack from `getBaseHttpStack` goes out without any Approov processing and without Approov pinning. It is neither failed nor held.
 
 # Exceptions
 
@@ -65,7 +65,7 @@ Many methods throw an `ApproovException` when there is a problem. It is a Volley
 
 * `ApproovFetchStatusException`, a subclass of `ApproovException`, carries the SDK fetch status in `getTokenFetchStatus()`.
 * `ApproovNetworkException`, a subclass of `ApproovFetchStatusException`, means a network problem caused the failure (`NO_NETWORK`, `POOR_NETWORK` or `MITM_DETECTED`). Your app should let the user retry. This class is deprecated: catch `ApproovFetchStatusException` and check `getTokenFetchStatus()` instead. It is still thrown, so existing handlers keep working.
-* `ApproovRejectionException`, a subclass of `ApproovException`, means the app failed attestation. The direct methods throw it. `getARC()` returns the [Attestation Response Code](https://approov.io/docs/latest/approov-usage-documentation/#attestation-response-code). Your user can give it to your app support, who can then find the reason for the failure without it being revealed to the user. `getRejectionReasons()` returns the [Rejection Reasons](https://approov.io/docs/latest/approov-usage-documentation/#rejection-reasons) as a comma separated list, if the feature is enabled.
+* `ApproovRejectionException`, a subclass of `ApproovFetchStatusException` with the status `REJECTED`, means the app failed attestation. The direct methods throw it. `getARC()` returns the [Attestation Response Code](https://approov.io/docs/latest/approov-usage-documentation/#attestation-response-code). Your user can give it to your app support, who can then find the reason for the failure without it being revealed to the user. `getRejectionReasons()` returns the [Rejection Reasons](https://approov.io/docs/latest/approov-usage-documentation/#rejection-reasons) as a comma separated list, if the feature is enabled.
 
 Every method that calls the Approov SDK first checks [isApproovProtectionEnabled](#isapproovprotectionenabled). While it is `false`, the method throws `ApproovException` with the message `<method>: SDK not initialized`, without calling the SDK. These methods are `setDevKey`, `precheck`, `getDeviceID`, `getServerAdjustedCurrentTimeMS`, `setDataHashInToken`, `fetchToken`, `getAccountMessageSignature`, `getInstallMessageSignature`, `fetchSecureString`, `fetchCustomJWT`, `setInstallAttributes` and `setInstallAttrsInToken`. The deprecated `getMessageSignature` throws the same exception.
 
@@ -114,7 +114,7 @@ You can pass an empty string instead of the account ID to skip initializing the 
 
 * `isApproovServiceEnabled()` returns `true` and `isApproovProtectionEnabled()` returns `false`.
 * The SDK is not called.
-* `getBaseHttpStack()` returns `null`. A queue that Volley builds from `null` has no Approov token, message signing, secure strings or Approov pinning. Connections are checked by the operating system's trust alone.
+* `getBaseHttpStack()` returns the stack, which sends requests without Approov token, message signing, secure strings or Approov pinning. Connections are checked by the operating system's trust alone.
 
 Bypass mode is meant as a starting state for advanced integrations. A later `initialize` with the account ID is passed to the SDK, and turns on Approov protection if the SDK accepts it. Like any `initialize`, it resets the configuration. If the SDK rejects it, the package stays in bypass mode. An empty string after protection is on is ignored and not passed to the SDK. See [bypass initialization](ADVANCED.md#bypass-initialization).
 
@@ -198,7 +198,7 @@ Typical use:
 RequestQueue queue = Volley.newRequestQueue(context, ApproovService.getBaseHttpStack());
 ```
 
-It returns `null` before `initialize` and in bypass mode. `Volley.newRequestQueue` then builds the standard stack, so the same line works in every case. A queue built from `null` stays unprotected, also after a later `initialize` turns Approov on, so build a new queue after that `initialize`.
+It never returns `null`, and it returns the same stack each time. Before `initialize` and in bypass mode, the stack sends requests without any Approov processing and without Approov pinning. Once `initialize` turns Approov on, the same stack protects requests, so a stack or a queue that you built earlier needs no replacement.
 
 A pin failure fails only that request. If the SDK cannot give the pins, the connection continues on OS trust and one error is logged.
 

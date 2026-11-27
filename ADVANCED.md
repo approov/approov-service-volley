@@ -171,10 +171,10 @@ Each `initialize` that succeeds puts these back to their defaults, so set them a
 
 Initialize with an empty string instead of the account ID to start the package in bypass mode. In bypass mode the package is enabled but protects nothing: `isApproovServiceEnabled()` is `true` and `isApproovProtectionEnabled()` is `false`. In this mode:
 
-* `getBaseHttpStack()` returns `null`, so `Volley.newRequestQueue(context, null)` builds the standard Volley stack. Requests through that queue go out with no Approov processing. There is no token, signing, secure strings or Approov connection check, only OS trust.
+* the stack from `getBaseHttpStack()` sends requests with no Approov processing. There is no token, signing, secure strings or Approov connection check, only OS trust.
 * the methods that call the SDK throw `ApproovException` without calling it.
 
-Before any `initialize`, `getBaseHttpStack()` also returns `null`. A queue built from the standard stack stays unprotected for its whole life. A stack that you got after a successful `initialize` keeps working through later calls.
+Before any `initialize`, the stack from `getBaseHttpStack()` works the same way. It is one stack for the life of the process. A queue built with it protects its requests once an `initialize` turns Approov on.
 
 Bypass mode is a starting or fallback state. Use it, for example, while your app fetches the account ID remotely. The README example also uses it as a guard, in case the account ID does not reach the app intact.
 
@@ -182,7 +182,7 @@ Bypass mode is a starting or fallback state. Use it, for example, while your app
 ApproovService.initialize(context, "");
 ```
 
-A later `initialize` with the account ID turns Approov on at runtime, if the SDK accepts it. Like each `initialize` that succeeds, it resets the configuration to its defaults, so make your configuration calls again after it. Then build your queue again with `getBaseHttpStack()`, which no longer returns `null`.
+A later `initialize` with the account ID turns Approov on at runtime, if the SDK accepts it. Like each `initialize` that succeeds, it resets the configuration to its defaults, so make your configuration calls again after it. A queue that you built with `getBaseHttpStack()` protects its requests from then on.
 
 Once protection is on, the package ignores an `initialize` with an empty string, and resets nothing. The SDK rejects a later `initialize` with a different account ID or a different comment. Its exception reaches your code, and the package state is unchanged. See [initialize in the reference](REFERENCE.md#initialize).
 
@@ -214,7 +214,7 @@ Each `initialize` that succeeds resets these settings to their defaults:
 * the substitutions and the exclusions
 * the service mutator
 
-It also replaces the HTTP stack, and clears `getLastARC()`. It keeps the logging level. Any other setting made before `initialize` is lost.
+It also clears `getLastARC()`. It keeps the logging level. Any other setting made before `initialize` is lost.
 
 Two kinds of `initialize` change nothing. The first has an empty account ID after protection is on, and the package ignores it. The second is one that the SDK rejects, for example a repeat call with a different account ID or a different comment. The SDK then throws `IllegalStateException`, which reaches your code.
 
