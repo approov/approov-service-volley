@@ -65,6 +65,9 @@ final class PinningHostnameVerifier implements HostnameVerifier {
     // which is per process as a verifier is made per connection
     private static final Set<String> warnedOsTrustOnlyHosts = new HashSet<>();
 
+    // true once the pins being unavailable has been logged, which is per process as a verifier is made per connection
+    private static boolean loggedPinsUnavailable;
+
     // HostnameVerifier you would normally be using
     private final HostnameVerifier delegate;
 
@@ -92,7 +95,7 @@ final class PinningHostnameVerifier implements HostnameVerifier {
     }
 
     /**
-     * Gets the pinning failure of the connection, if the Approov pins rejected it or could not be read.
+     * Gets the pinning failure of the connection, if the Approov pins rejected it.
      *
      * @return the platform pinning exception to report, or null if the pins did not reject the connection
      */
@@ -106,6 +109,7 @@ final class PinningHostnameVerifier implements HostnameVerifier {
     static void resetWarnings() {
         synchronized (warnedOsTrustOnlyHosts) {
             warnedOsTrustOnlyHosts.clear();
+            loggedPinsUnavailable = false;
         }
     }
 
@@ -123,7 +127,7 @@ final class PinningHostnameVerifier implements HostnameVerifier {
         // different case or a trailing dot escapes the pins
         String host = ApproovService.normalizeHost(hostname);
 
-        // a pin set that cannot be read fails the connection closed
+        // a pin set that cannot be read leaves the host on OS trust only, which the delegate has checked
         Map<String, List<String>> allPins;
         Set<String> hostPins;
         try {
@@ -132,12 +136,8 @@ final class PinningHostnameVerifier implements HostnameVerifier {
                 throw new IllegalStateException("getPins returned no pins");
             hostPins = pinsFor(host, allPins);
         } catch (RuntimeException e) {
-            ApproovLog.e(TAG, "Approov pinning: pins unavailable for " + host + ": " + e);
-            SSLPeerUnverifiedException unavailable = new SSLPeerUnverifiedException(
-                    "Approov pinning: pins unavailable for " + host);
-            unavailable.initCause(e);
-            failure = unavailable;
-            return false;
+            logPinsUnavailable(e);
+            return true;
         }
 
         // with no pins the host is validated by OS trust only, which the delegate has checked
@@ -162,6 +162,21 @@ final class PinningHostnameVerifier implements HostnameVerifier {
         ApproovLog.e(TAG, "Approov pinning: no pin matches for " + host);
         failure = new SSLPeerUnverifiedException("Approov pinning: no pin matches for " + host);
         return false;
+    }
+
+    /**
+     * Logs once per process that the Approov pins could not be read, so connections continue on OS trust only.
+     * The exception is named, never a pin.
+     *
+     * @param e is the failure to read the pins
+     */
+    private static void logPinsUnavailable(RuntimeException e) {
+        synchronized (warnedOsTrustOnlyHosts) {
+            if (loggedPinsUnavailable)
+                return;
+            loggedPinsUnavailable = true;
+        }
+        ApproovLog.e(TAG, "Approov pinning: pins unavailable, OS trust only: " + e);
     }
 
     /**
@@ -193,7 +208,6 @@ final class PinningHostnameVerifier implements HostnameVerifier {
      * @param allPins is the SDK pin set
      * @return the pins for the host, which are empty if the host is not listed or has no pins and no managed
      * trust roots
-     * @throws IllegalStateException if the pin set lists a domain without a pin list
      */
     static Set<String> pinsFor(String host, Map<String, List<String>> allPins) {
         List<String> managedTrustRoots = allPins.get("*");
@@ -202,8 +216,9 @@ final class PinningHostnameVerifier implements HostnameVerifier {
             String domain = entry.getKey();
             if ("*".equals(domain))
                 continue;
+            // a domain without a pin list is listed with no pins, so it adds none
             if ((domain == null) || (entry.getValue() == null))
-                throw new IllegalStateException("getPins returned a domain without pins");
+                continue;
             if (!ApproovService.normalizeHost(domain).equals(host))
                 continue;
 

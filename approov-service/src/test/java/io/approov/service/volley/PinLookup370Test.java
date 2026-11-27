@@ -58,8 +58,9 @@ import javax.net.ssl.SSLSession;
  * of a connection are looked up exactly per host, without regard to case and ignoring one trailing dot, on both the
  * host and the keys of the SDK pin set. The "*" key is the managed trust roots of a listed host with no pins of
  * its own, never a pattern. A listed host with no pins and no managed trust roots connects on OS trust with one
- * warning per host. A pin set that cannot be read fails the connection closed, and a pin mismatch fails it, both
- * with SSLPeerUnverifiedException, logged at error level without any pin.
+ * warning per host. A pin set that cannot be read (SDK failure or null) continues on OS trust with one error
+ * log per process, and a domain with no pin list is a listed host with no pins. A pin mismatch fails the connection with
+ * SSLPeerUnverifiedException, logged at error level without any pin.
  * <p>
  * The verifier is called directly with the certificate the fixture servers present, and on the wire through the
  * Volley stack with a certificate that does not name the host, so that the JVM asks the verifier.
@@ -236,38 +237,49 @@ public class PinLookup370Test {
     }
 
     @Test
-    public void aNullPinSetFailsClosed() {
+    public void aNullPinSetContinuesOnOsTrust() {
         sdk.pinsAnswer = () -> null;
         PinningHostnameVerifier verifier = verifier();
-        assertFalse("a pin set that cannot be read must not pass", verifier.verify("localhost", session));
-        SSLPeerUnverifiedException failure = verifier.failure();
-        assertNotNull(failure);
-        assertEquals("Approov pinning: pins unavailable for localhost", failure.getMessage());
+        assertTrue("a pin set that cannot be read continues on OS trust", verifier.verify("localhost", session));
+        assertNull(verifier.failure());
+        assertTrue(verify("localhost"));
         assertEquals(1, logged(Log.ERROR).size());
         assertTrue(logged(Log.ERROR).get(0), logged(Log.ERROR).get(0)
-                .startsWith("Approov pinning: pins unavailable for localhost: "));
+                .startsWith("Approov pinning: pins unavailable, OS trust only: "));
     }
 
     @Test
-    public void aPinSetTheSdkFailsToGiveFailsClosed() {
+    public void aPinSetTheSdkFailsToGiveContinuesOnOsTrust() {
         IllegalStateException sdkFailure = new IllegalStateException("sdk failure");
         sdk.pinsAnswer = () -> {
             throw sdkFailure;
         };
         PinningHostnameVerifier verifier = verifier();
-        assertFalse(verifier.verify("localhost", session));
-        assertEquals("Approov pinning: pins unavailable for localhost", verifier.failure().getMessage());
-        assertSame(sdkFailure, verifier.failure().getCause());
-        assertEquals(Collections.singletonList("Approov pinning: pins unavailable for localhost: " + sdkFailure),
+        assertTrue(verifier.verify("localhost", session));
+        assertNull(verifier.failure());
+        // a second connection is also accepted, with no second error
+        assertTrue(verify("localhost"));
+        assertEquals(Collections.singletonList("Approov pinning: pins unavailable, OS trust only: " + sdkFailure),
                 logged(Log.ERROR));
     }
 
     @Test
-    public void aDomainWithNoPinListFailsClosed() {
-        pins("localhost", null);
+    public void aDomainWithNoPinListIsOsTrustWithTheWarningAndOthersStayPinned() {
+        pins("localhost", null, "127.0.0.1", list(WRONG_PIN));
         PinningHostnameVerifier verifier = verifier();
-        assertFalse(verifier.verify("localhost", session));
-        assertEquals("Approov pinning: pins unavailable for localhost", verifier.failure().getMessage());
+        assertTrue(verifier.verify("localhost", session));
+        assertNull(verifier.failure());
+        assertEquals(Collections.singletonList(OS_TRUST_WARNING), logged(Log.WARN));
+        assertEquals(Collections.emptyList(), logged(Log.ERROR));
+
+        // another listed host keeps its pins, so a mismatch still fails closed
+        PinningHostnameVerifier other = verifier();
+        assertFalse(other.verify("127.0.0.1", session));
+        assertEquals("Approov pinning: no pin matches for 127.0.0.1", other.failure().getMessage());
+
+        // and a match still passes
+        pins("localhost", null, "127.0.0.1", list(rightPin));
+        assertTrue(verify("127.0.0.1"));
     }
 
     @Test
@@ -291,17 +303,14 @@ public class PinLookup370Test {
     }
 
     @Test
-    public void unreadablePinsOnTheWireFailWithThePlatformPinningException() throws Exception {
+    public void unreadablePinsOnTheWireContinueOnOsTrust() throws Exception {
         sdk.pinsAnswer = () -> {
             throw new IllegalStateException("sdk failure");
         };
-        try {
-            origins.send(new MiniSdkHttpsOrigins.AppRequest(origins.firstUrl("/pinned")));
-            fail("a host was reached with no pins read");
-        } catch (SSLPeerUnverifiedException e) {
-            assertEquals("Approov pinning: pins unavailable for localhost", e.getMessage());
-        }
-        assertEquals(0, origins.first.getRequestCount());
+        origins.first.enqueue(MiniSdkHttpsOrigins.ok());
+        assertEquals(200, origins.send(new MiniSdkHttpsOrigins.AppRequest(origins.firstUrl("/pinned")))
+                .getStatusCode());
+        assertEquals(1, origins.first.getRequestCount());
     }
 
     @Test
