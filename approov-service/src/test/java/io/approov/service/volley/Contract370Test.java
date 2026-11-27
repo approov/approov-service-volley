@@ -20,8 +20,10 @@ package io.approov.service.volley;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mockStatic;
 
 import android.content.Context;
@@ -231,6 +233,35 @@ public class Contract370Test {
             assertEquals("fetchSecureString lookup for the-key: REJECTED: ARC123 hooked,rooted", assertThrows(
                     ApproovRejectionException.class, () -> ApproovService.fetchSecureString("the-key", null))
                     .getMessage());
+        }
+    }
+
+    @Test
+    public void aRejectionIsAFetchStatusExceptionWithItsGettersUnchanged() {
+        ApproovRejectionException built = new ApproovRejectionException("m", "ARC9", "rooted");
+        assertTrue(built instanceof ApproovFetchStatusException);
+        assertTrue(built instanceof ApproovException);
+        assertEquals(Approov.TokenFetchStatus.REJECTED, built.getTokenFetchStatus());
+        assertEquals("m", built.getMessage());
+        assertEquals("ARC9", built.getARC());
+        assertEquals("rooted", built.getRejectionReasons());
+        assertNull(new ApproovRejectionException("m", null, null).getRejectionReasons());
+
+        try (MockedStatic<Approov> approov = mockStatic(Approov.class)) {
+            ApproovTestSupport.initializeApproovService(approov);
+            Approov.TokenFetchResult rejected = ApproovTestSupport.tokenResult(Approov.TokenFetchStatus.REJECTED);
+            approov.when(() -> Approov.fetchCustomJWTAndWait("{}")).thenReturn(rejected);
+            try {
+                ApproovService.fetchCustomJWT("{}");
+                fail("a rejection must be thrown");
+            } catch (ApproovFetchStatusException e) {
+                assertTrue(e instanceof ApproovRejectionException);
+                assertEquals("ARC123", ((ApproovRejectionException) e).getARC());
+                assertEquals("hooked,rooted", ((ApproovRejectionException) e).getRejectionReasons());
+                assertEquals(Approov.TokenFetchStatus.REJECTED, e.getTokenFetchStatus());
+            } catch (ApproovException e) {
+                fail("a rejection must be caught as an ApproovFetchStatusException");
+            }
         }
     }
 }
