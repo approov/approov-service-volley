@@ -34,7 +34,8 @@
     <!-- Required at runtime by the closed-source Approov SDK (approov-android-sdk), which uses
          okhttp3 internally but does not declare it. Removing this makes Approov.initialize() fail
          with NoClassDefFoundError: okhttp3.EventListener in consuming apps. The service layer's own
-         code no longer uses okhttp, hence runtime scope only. -->
+         code uses only okhttp3.HttpUrl, to sign the URL in the form Android sends it. It is an
+         implementation dependency of the layer, which Maven gives runtime scope. -->
     <dependency>
         <groupId>com.squareup.okhttp3</groupId>
         <artifactId>okhttp</artifactId>
@@ -44,7 +45,7 @@
     <dependency>
         <groupId>io.approov</groupId>
         <artifactId>approov-android-sdk</artifactId>
-        <version>3.5.3</version>
+        <version>3.7.0</version>
         <scope>runtime</scope>
     </dependency>
     <dependency>

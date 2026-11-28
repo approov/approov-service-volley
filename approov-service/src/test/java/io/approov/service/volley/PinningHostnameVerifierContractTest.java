@@ -43,12 +43,16 @@ public class PinningHostnameVerifierContractTest {
     @Before
     public void setUp() {
         approovMock = Mockito.mockStatic(Approov.class);
+        PinningHostnameVerifier.resetWarnings();
+        // the pins are only checked with Approov protection enabled
+        ApproovTestSupport.setProtectionEnabled(true);
         delegate = mock(HostnameVerifier.class);
         when(delegate.verify(anyString(), Mockito.any())).thenReturn(true);
     }
 
     @After
     public void tearDown() {
+        ApproovTestSupport.setProtectionEnabled(false);
         approovMock.close();
     }
 

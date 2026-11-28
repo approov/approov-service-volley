@@ -219,8 +219,10 @@ public class ApproovServiceMiniSdkTest {
         StringRequest request = new StringRequest(Request.Method.GET, getTargetURL(), null, null);
         JSONObject reply = executeRequest(request);
 
-        assertNull(getHeader(reply, "Approov-Token"));
-        assertNull(getHeader(reply, "Approov-TraceID"));
+        // NO_APPROOV_SERVICE proceeds as a failure status to a listed host, with an empty token header and
+        // the trace header
+        assertEquals("", getHeader(reply, "Approov-Token"));
+        assertNotNull(getHeader(reply, "Approov-TraceID"));
     }
 
     @Test

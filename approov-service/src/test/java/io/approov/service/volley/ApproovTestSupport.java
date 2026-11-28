@@ -25,9 +25,9 @@ final class ApproovTestSupport {
     }
 
     static void resetApproovServiceState() {
-        setStaticField("hurlStack", null);
         setStaticField("isInitialized", false);
-        setStaticField("configString", null);
+        setStaticField("approovProtectionEnabled", false);
+        setStaticField("lastARC", "");
         setStaticField("useApproovStatusIfNoToken", false);
         setStaticField("approovTokenHeader", null);
         setStaticField("approovTokenPrefix", null);
@@ -35,6 +35,8 @@ final class ApproovTestSupport {
         setStaticField("bindingHeader", null);
         setStaticField("serviceMutator", ApproovServiceMutator.DEFAULT);
         setStaticField("exclusionURLRegexs", new HashMap<String, Pattern>());
+        setStaticField("substitutionHeaders", new HashMap<String, String>());
+        setStaticField("substitutionQueryParams", new HashMap<String, Pattern>());
     }
 
     static void initializeApproovService(MockedStatic<Approov> approov) {
@@ -97,6 +99,12 @@ final class ApproovTestSupport {
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("Failed to read field " + name, e);
         }
+    }
+
+    // sets whether Approov protection is enabled, without the SDK, for a check that needs it
+    static void setProtectionEnabled(boolean enabled) {
+        setStaticField("isInitialized", enabled);
+        setStaticField("approovProtectionEnabled", enabled);
     }
 
     private static void setStaticField(String name, Object value) {

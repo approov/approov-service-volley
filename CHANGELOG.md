@@ -4,6 +4,62 @@ All notable changes to this package will be documented in this file.
 
 The format is based on Keep a Changelog and this project adheres to Semantic Versioning.
 
+## [3.7.0] - 2026-11-28
+
+Entries marked **Breaking** need a source change. See [Upgrading from 3.5.x](README.md#upgrading-from-35x).
+
+### Changed
+- **Breaking:** The message signing helper classes moved from `io.approov.util.http.sfv` and `io.approov.util.sig` to `io.approov.util.volley.http.sfv` and `io.approov.util.volley.sig`. Update imports of classes such as `SignatureParameters` and `ComponentProvider`.
+- **Breaking:** `initialize` passes every non-empty account ID and comment to the Approov SDK and the SDK decides, so the layer no longer compares account IDs itself. It resets the configuration each time, so make your configuration calls after it. It throws `IllegalArgumentException` for a null context, also in bypass mode (`""`). See [initialize, then configure](ADVANCED.md#initialize-then-configure).
+- **Breaking:** `SignatureParametersFactory` has a new protected field, `useInstallMessageSigning`, which starts `true`, and its parameters no longer set the algorithm, as the signer produces one signature per algorithm the factory selects. A subclass that sets `useAccountMessageSigning = true` directly now produces both signatures. Call `setUseAccountMessageSigning()` to produce the account signature only.
+- The package follows the redirects of the requests it processes. A hop to another origin carries nothing the package added, and a hop to the same origin is protected again. See [redirects](ADVANCED.md#redirects).
+- `getBaseHttpStack()` no longer returns `null` before `initialize` or in bypass mode. Requests through that stack go out without Approov protection until `initialize` is called, and the same stack then protects them.
+- A WebSocket upgrade request is sent untouched, with no Approov token, secure strings or signature.
+- Pins are matched against the certificate chain the platform validated. A pin matches the host without regard to case and with one trailing dot ignored.
+- If the SDK cannot supply the pins, connections continue on OS trust and one error is logged. See [connection validation](ADVANCED.md#connection-validation).
+- Every `https` connection requests `Connection: close`, so that each request opens a new connection and the pins apply to it. A `Connection` header set by your request replaces it.
+- A failed token fetch only affects requests to your Approov API domains, the hosts in your pin set. Requests to other hosts are sent unchanged.
+- A failed secure string fetch no longer fails the request under the standard mutators. The substitution is skipped and the request proceeds. The status name replaces the placeholder, such as `X-Api-Key: REJECTED`. A value that is not a secure string key (`UNKNOWN_KEY`) is left as your app wrote it. See [secure strings](ADVANCED.md#secure-strings).
+- Secure strings are substituted on requests to secrets-only API domains (`approov api -add <domain> -noApproovToken`) as well as on token-protected ones.
+- `NO_APPROOV_SERVICE` proceeds with the trace header, as a failure status does, where 3.5.x sent no Approov headers.
+- A token fetch that is rejected throws `ApproovFetchStatusException`, where 3.5.x threw `ApproovRejectionException`.
+- `ApproovRejectionException` is now a subclass of `ApproovFetchStatusException` with the status `REJECTED`, so a handler for `ApproovFetchStatusException` catches it. Its constructor and getters are unchanged.
+- An exception from your own mutator reaches your app as an `ApproovException` that names the hook, with the original as its cause. Volley delivers it as an `AuthFailureError`.
+- The token header is set after your `handleRequestProcessedHeaders` hook runs, so the hook cannot remove it.
+- Each token is bound to its own request's binding header value, also when requests with different values are in flight at once.
+- `Content-Length` is not a covered component of a signature, because the platform adds it after signing. `Content-Digest` covers the body.
+- A missing install or account signature is logged as a warning once per process, and a request sent unsigned as an error once per process. Later occurrences are logged at debug level.
+- The signed `@target-uri` leaves out an explicit default port (`:443` for `https`, `:80` for `http`) and any `#fragment`, and the `@authority` is the lowercase host with a non-default port. The URL is no longer read with `java.net.URI`, so a URL it rejects, such as one with `|` in the query, is signed. A host factory is matched by host name without regard to case and without a port.
+- The package signs and sends the URL in the normalized form that Android sends. It percent-encodes the characters that Android percent-encodes, such as `|` or a space in the path and characters that are not ASCII, and keeps existing escapes. If the package cannot parse a URL, it sends the request unsigned.
+- The default factory covers `Content-Type` on a request with a body, with the value that Volley sends: `getBodyContentType()`, or the `Content-Type` from `getHeaders()`.
+- Message signatures take their `created` and `expires` times from the server adjusted time.
+- `getLastARC()` makes no token fetch of its own. It returns the ARC of the most recent token, secure string or custom JWT fetch, or an empty string.
+- BouncyCastle is replaced by Google Tink 1.23.0. It is bundled in the AAR and relocated, so it cannot clash with your own dependencies. The published POM adds none.
+- The package depends on Approov SDK 3.7.0, where 3.5.x depended on 3.5.3.
+
+### Deprecated
+- `getMessageSignature(message)`. Use `getAccountMessageSignature`.
+- `setApproovHeader` and `setApproovTraceIDHeader`. Use `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
+
+### Added
+- `ApproovDefaultMessageSigning.combined()` and `combined(ApproovServiceMutator decisions)` give a signer that adds both the install and the account signature and makes the decisions you pass, for example `ApproovDefaultMessageSigning.combined(ApproovServiceMutator.ALWAYS_PROCEED)`. See [message signing](ADVANCED.md#message-signing).
+- Message signing can produce the account signature as well as the install signature: `SignatureParametersFactory.setUseInstallAndAccountMessageSigning()`.
+- `ApproovService.addSubstitutionHeader`, `addSubstitutionQueryParam`, their `remove` methods and their getters register the headers and URL query parameters for secure strings. The HTTP stack substitutes them on every attempt of a request, so a `Request` needs no change. See [secure strings](ADVANCED.md#secure-strings).
+- `ApproovServiceMutator.handlePinningShouldProcessRequest(Request)`, which skips Approov pinning for chosen requests. The package asks it for each request, and for each redirect it follows.
+- `ApproovServiceMutator.CLOSE_FAILURE`, the default, which keeps the 3.5.x decisions, and `ALWAYS_PROCEED`, which never aborts a request on a token fetch failure. See [what happens by default](ADVANCED.md#what-happens-by-default).
+- `ApproovService.getServerAdjustedCurrentTimeMS()`, the current time corrected to the Approov servers' clock. If the server time is not available the device clock is used and a warning is logged.
+- `ApproovService.setLoggingLevel(ApproovLogLevel)`, `INFO` by default. `OFF` silences the layer, and debug logging for the `ApproovService` tag raises any other level to `DEBUG`. The loggable token is logged at `DEBUG` only, with the URL without its query, user info or fragment. See [diagnostics](ADVANCED.md#diagnostics).
+- The names shared by all Approov packages: `isApproovServiceEnabled()`, `isApproovProtectionEnabled()`, `setInstallAttributes(String)`, `getTokenHeader()`, `getTokenPrefix()`, `getTraceIDHeader()`, `setTokenHeader(header, prefix)` and `setTraceIDHeader(header)`.
+
+### Removed
+- **Breaking:** `setProceedOnNetworkFail(boolean)`, which had no effect in 3.5.x. Use `ALWAYS_PROCEED` or `setUseApproovStatusIfNoToken(true)`.
+- **Breaking:** `prefetch()`. The SDK manages prefetching itself.
+- BouncyCastle, which the package no longer bundles.
+
+### Fixed
+- A request to an `http` URL on your API domains is never sent a secure string.
+- A `Content-Digest` is made only over a body that Volley sends (POST, PUT and PATCH). A `DELETE` or `GET` request that returns a body from `getBody()` is no longer signed over bytes that Volley never sends.
+
 ## [3.5.6] - 2026-10-07
 
 ### Changed
@@ -23,7 +79,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 - `REFERENCE.md`: documented that `precheck` is for development-time verification, and that manual (`setDataHashInToken`) and automatic (`setBindingHeader`) token binding must not be mixed.
 
 ### Fixed
-- Pinned HTTPS connections now request `Connection: close` so a dynamic pin update takes effect on the next request. The pinning `HostnameVerifier` only runs during a new TLS handshake, so without this an established keep-alive connection could be reused under a now-superseded pin set.
+- Pinned HTTPS connections now request `Connection: close` so a dynamic pin update takes effect on the next request. The pinning `HostnameVerifier` only runs during a new TLS handshake, so without this an established keep-alive connection could be reused under a now-superseded pin set. From 3.7.0 every `https` connection requests it.
 - Message signing is now fail-open symmetrically: an unavailable or empty **account** (HS256) signature no longer fails the request — it is logged at error level and the request proceeds unsigned, matching the existing install (ES256) behaviour. Only an unsupported signing algorithm or a required-but-ungeneratable body digest fail closed.
 - Genuine message-signing failures (base64/ASN.1 decode, serialization) are now surfaced as `ApproovException` rather than escaping as an unchecked exception.
 - `setApproovHeader(header, prefix)` treats a `null` prefix as no prefix (empty string), preventing a literal `"null"` from being prepended to the Approov token header value.
